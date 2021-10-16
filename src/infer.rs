@@ -123,9 +123,12 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             let (sp, tp) = infer(env, t, *p)?;
             let (s1, t1) = infer(env, t, *e1)?;
             let (s2, t2) = infer(env, t, *e2)?;
-            let s3 = unify(t1.apply(&s1), t2.apply(&s2))?;
-            let s4 = unify(tp.apply(&sp), Type::Boolean)?;
-            Ok((combine(&combine(&combine(&combine(&sp, &s1), &s2), &s3), &s4), t1))
+            let s3 = unify(tp.apply(&sp), Type::Boolean)?;
+            if let Ok(s4) = unify(t1.apply(&s1), t2.apply(&s2)) {
+                Ok((combine(&combine(&combine(&combine(&sp, &s1), &s2), &s3), &s4), t1))
+            } else {
+                Ok((combine(&combine(&combine(&sp, &s1), &s2), &s3), Type::Or(Box::new(t1), Box::new(t2))))
+            }
         },
     }
 }

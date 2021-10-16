@@ -29,7 +29,8 @@ pub enum Type {
     Arrow(Box<Type>, Box<Type>),
     Number,
     Boolean,
-    Record(HashMap<String, Type>)
+    Record(HashMap<String, Type>),
+    Or(Box<Type>, Box<Type>)
 }
 
 impl Type {
@@ -63,7 +64,8 @@ impl fmt::Display for Type {
             Type::Arrow(l, r) => write!(f, "({} -> {})", *l, *r),
             Type::Number => write!(f, "Num"),
             Type::Boolean => write!(f, "Bool"),
-            Type::Record(r) => write!(f, "{:?}", r)
+            Type::Record(r) => write!(f, "{:?}", r),
+            Type::Or(l, r) => write!(f, "{} | {}", *l, *r)
         }
     }
 }
@@ -107,7 +109,8 @@ impl Substable for Type {
                     .unwrap_or(Type::Variable(v.clone())),
             Type::Number => Type::Number,
             Type::Boolean => Type::Boolean,
-            Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), v.apply(s))).collect())
+            Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), v.apply(s))).collect()),
+            Type::Or(l, r) => Type::Or(Box::new(l.apply(s)), Box::new(r.apply(s))),
         }
     }
     fn free_type_vars(&self) -> HashSet<String> {
@@ -121,7 +124,8 @@ impl Substable for Type {
                     .fold(HashSet::new(), |mut acc, x| {
                         acc.extend(x.free_type_vars());
                         acc
-                    })
+                    }),
+            Type::Or(l, r) => l.free_type_vars().union(r.free_type_vars())
         }
     }
 }
