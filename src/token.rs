@@ -20,7 +20,12 @@ pub enum Token {
     LBrace,
     RBrace,
     Colon,
-    Comma
+    Comma,
+    If,
+    Then,
+    Else,
+    True,
+    False
 }
 
 impl cmp::PartialEq for Token {
@@ -43,6 +48,11 @@ impl cmp::PartialEq for Token {
             Token::RBrace => matches!(Token::RBrace, other),
             Token::Colon => matches!(Token::Colon, other),
             Token::Comma => matches!(Token::Comma, other),
+            Token::If => matches!(Token::If, other),
+            Token::Then => matches!(Token::Then, other),
+            Token::Else => matches!(Token::Else, other),
+            Token::True => matches!(Token::True, other),
+            Token::False => matches!(Token::False, other),
         }
     }
 }

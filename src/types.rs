@@ -28,6 +28,7 @@ pub enum Type {
     Variable(String),
     Arrow(Box<Type>, Box<Type>),
     Number,
+    Boolean,
     Record(HashMap<String, Type>)
 }
 
@@ -42,13 +43,15 @@ impl Type {
     #[allow(unused_variables)]
     pub fn type_check(&self, env: &Env, tv: &mut TypeVarSet, e: expr::Expr) -> bool {
         match e {
-            expr::Expr::Function(p, b) => todo!(),
-            expr::Expr::Application(l, r) => todo!(),
+            expr::Expr::Function(..) => todo!(),
+            expr::Expr::Application(..) => todo!(),
             expr::Expr::Number(_) => self == &Type::Number,
+            expr::Expr::Boolean(_) => self == &Type::Boolean,
             expr::Expr::Variable(v) => 
                 env.0.get(&v).map(|t| &t.instantiate(tv) == self).unwrap_or(false),
-            expr::Expr::Let(p, v, e) => todo!(),
-            expr::Expr::Record(r) => todo!()
+            expr::Expr::Let(..) => todo!(),
+            expr::Expr::Record(_) => todo!(),
+            expr::Expr::If(..) => todo!()
         }
     }
 }
@@ -59,6 +62,7 @@ impl fmt::Display for Type {
             Type::Variable(v) => write!(f, "{}", v),
             Type::Arrow(l, r) => write!(f, "({} -> {})", *l, *r),
             Type::Number => write!(f, "Num"),
+            Type::Boolean => write!(f, "Bool"),
             Type::Record(r) => write!(f, "{:?}", r)
         }
     }
@@ -102,6 +106,7 @@ impl Substable for Type {
                     .map(|x| x.apply(s)) // dont forget to recurse here, it is a major bug source
                     .unwrap_or(Type::Variable(v.clone())),
             Type::Number => Type::Number,
+            Type::Boolean => Type::Boolean,
             Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), v.apply(s))).collect())
         }
     }
@@ -109,6 +114,7 @@ impl Substable for Type {
         match self {
             Type::Arrow(l, r) => l.free_type_vars().union(r.free_type_vars()),
             Type::Number => HashSet::new(),
+            Type::Boolean => HashSet::new(),
             Type::Variable(v) => HashSet::unit(v.clone()),
             Type::Record(r) => 
                 r.values()

@@ -29,9 +29,29 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::Fn);
                 text = &text[3..];
             },
+            'i' if text.len() > 2 && text[1] == 'f' && text[2] == ' ' => {
+                out.push(Token::If);
+                text = &text[3..];
+            },
             'l' if text.len() > 3 && text[1] == 'e' && text[2] == 't' && text[3] == ' ' => {
                 out.push(Token::Let);
                 text = &text[4..];
+            },
+            't' if text.len() > 4 && text[1] == 'h' && text[2] == 'e' && text[3] == 'n' && text[4] == ' ' => {
+                out.push(Token::Then);
+                text = &text[5..];
+            },
+            'e' if text.len() > 4 && text[1] == 'l' && text[2] == 's' && text[3] == 'e' && text[4] == ' ' => {
+                out.push(Token::Else);
+                text = &text[5..];
+            },
+            't' if text.len() > 3 && text[1] == 'r' && text[2] == 'u' && text[3] == 'e' => {
+                out.push(Token::True);
+                text = &text[4..];
+            },
+            'f' if text.len() > 4 && text[1] == 'a' && text[2] == 'l' && text[3] == 's' && text[4] == 'e' => {
+                out.push(Token::False);
+                text = &text[5..];
             },
             'i' if text.len() > 3 && text[1] == 'n' && text[2] == ' ' => {
                 out.push(Token::In);

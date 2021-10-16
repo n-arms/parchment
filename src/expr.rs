@@ -3,7 +3,7 @@ use std::fmt;
 use rand::prelude::*;
 use im::hashmap::HashMap;
 use im::hashset::HashSet;
-use super::types::{Type, Scheme, Env};
+use super::types::{Type, Env};
 use super::infer::TypeError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,9 +69,11 @@ pub enum Expr {
     Function(Pattern, Box<Expr>),
     Application(Box<Expr>, Box<Expr>),
     Number(f64),
+    Boolean(bool),
     Variable(String),
     Let(Pattern, Box<Expr>, Box<Expr>),
     Record(HashMap<String, Expr>),
+    If(Box<Expr>, Box<Expr>, Box<Expr>),
 }
 
 impl cmp::PartialEq for Expr {
@@ -95,6 +97,12 @@ impl cmp::PartialEq for Expr {
             Expr::Record(r) => if let Expr::Record(r1) = other {
                 r == r1
             } else {false},
+            Expr::Boolean(b) => if let Expr::Boolean(b1) = other {
+                b == b1
+            } else {false},
+            Expr::If(p, e1, e2) => if let Expr::If(p1, e11, e21) = other {
+                p == p1 && e1 == e11 && e2 == e21
+            } else {false},
         }
     }
 }
@@ -107,9 +115,11 @@ impl fmt::Display for Expr {
             Expr::Application(l, r) => write!(f, "({} {})", *l, *r),
             Expr::Function(p, b) => write!(f, "(fn {} -> {})", *p, *b),
             Expr::Number(n) => write!(f, "{}", n),
+            Expr::Boolean(b) => write!(f, "{}", b),
             Expr::Variable(v) => write!(f, "{}", v),
             Expr::Let(p, v, e) => write!(f, "let {} = {} in {}", p, v, e),
-            Expr::Record(r) => write!(f, "{:?}", r)
+            Expr::Record(r) => write!(f, "{:?}", r),
+            Expr::If(p, e1, e2) => write!(f, "if {} then {} else {}", p, e1.as_ref(), e2.as_ref())
         }
     }
 }

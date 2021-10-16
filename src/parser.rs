@@ -22,6 +22,16 @@ pub enum ParseError {
     UnexpectedToken(Token, Token)
 }
 
+pub fn parse_if<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
+    expect!(Token::If, tokens);
+    let (p, tokens) = parse_expr(tokens)?;
+    expect!(Token::Then, tokens);
+    let (e1, tokens) = parse_expr(tokens)?;
+    expect!(Token::Else, tokens);
+    let (e2, tokens) = parse_expr(tokens)?;
+    Ok((Expr::If(Box::new(p), Box::new(e1), Box::new(e2)), tokens))
+}
+
 pub fn parse_record<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
     expect!(Token::LBrace, tokens);
     let mut contents : HashMap<String, Expr> = HashMap::new();
@@ -54,17 +64,32 @@ pub fn parse_let<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseEr
     Ok((Expr::Let(pat, Box::new(v), Box::new(e)), tokens))
 }
 
+pub fn parse_boolean<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
+    if tokens.len() == 0 {
+        return Err(ParseError::UnexpectedEof);
+    }
+    if let Token::True = tokens[0] {
+        Ok((Expr::Boolean(true), &tokens[1..]))
+    } else if let Token::False = tokens[0] {
+        Ok((Expr::Boolean(false), &tokens[1..]))
+    } else {
+        Err(ParseError::UnexpectedToken(Token::False, tokens[0].clone()))
+    }
+}
+
 pub fn parse_expr<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
     parse_application(tokens)
         .or_else(|_| parse_not_app(tokens))
 }
 
 pub fn parse_not_app<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
-    parse_variable(tokens)
+    parse_boolean(tokens)
         .or_else(|_| parse_record(tokens))
         .or_else(|_| parse_number(tokens))
+        .or_else(|_| parse_variable(tokens))
         .or_else(|_| parse_parens(tokens))
         .or_else(|_| parse_let(tokens))
+        .or_else(|_| parse_if(tokens))
         .or_else(|_| parse_function(tokens))
 }
 

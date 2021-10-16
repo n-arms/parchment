@@ -8,7 +8,6 @@ pub enum TypeError {
     UnknownVar(String),
     UnificationFail(Type, Type),
     InfiniteType(String, Type),
-    IncompatibleRecordTypes(HashMap<String, Type>, HashMap<String, Type>),
     MissingRecordField(String),
     IsntRecord(Type)
 }
@@ -36,6 +35,7 @@ pub fn unify(t1: Type, t2: Type) -> Result<Subst, TypeError> {
                 Ok(HashMap::unit(a, t))
             },
         (Type::Number, Type::Number) => Ok(HashMap::new()),
+        (Type::Boolean, Type::Boolean) => Ok(HashMap::new()),
         (Type::Record(r1), Type::Record(r2)) => 
             r1.iter()
                 .map(|(k, t1)| {
@@ -66,6 +66,7 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             Ok((combine(&combine(&s3, &s2), &s1), tv.apply(&s3)))
         },
         Expr::Number(_) => Ok((HashMap::new(), Type::Number)), // fairly trivial
+        Expr::Boolean(_) => Ok((HashMap::new(), Type::Boolean)), // fairly trivial
         Expr::Variable(v) => {
             let t = env.0.get(&v)
                 .map(|s| s.instantiate(t))
@@ -117,6 +118,14 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
                     acc
                 })?;
             Ok((s, Type::Record(rt)))
+        },
+        Expr::If(p, e1, e2) => {
+            let (sp, tp) = infer(env, t, *p)?;
+            let (s1, t1) = infer(env, t, *e1)?;
+            let (s2, t2) = infer(env, t, *e2)?;
+            let s3 = unify(t1.apply(&s1), t2.apply(&s2))?;
+            let s4 = unify(tp.apply(&sp), Type::Boolean)?;
+            Ok((combine(&combine(&combine(&combine(&sp, &s1), &s2), &s3), &s4), t1))
         },
     }
 }
