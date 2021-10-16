@@ -9,7 +9,8 @@ pub enum TypeError {
     UnificationFail(Type, Type),
     InfiniteType(String, Type),
     IncompatibleRecordTypes(HashMap<String, Type>, HashMap<String, Type>),
-    MissingRecordField(String)
+    MissingRecordField(String),
+    IsntRecord(Type)
 }
 
 fn combine(s1: &Subst, s2: &Subst) -> Subst {
@@ -71,14 +72,20 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
                 .ok_or(TypeError::UnknownVar(v))?;
             Ok((HashMap::new(), t)) // again, simple
         },
-        Expr::Let(Pattern::Variable(p), v, e) => {
-            let (s1, t1)= infer(env, t, *v)?;
+        Expr::Let(p, v, e) => {
+            let (s1, t1) = infer(env, t, *v)?;
             let env1 = env.apply(&s1);
-            let t0 = t1.generalize(&env1);
-            let (s2, t2) = infer(&Env(env1.0.update(p, t0)), t, *e)?;
+            let env2 = p.into_env(env, &t1)?;
+            let (s2, t2) = infer(&Env(env2.0.union(env1.0)), t, *e)?;
             Ok((combine(&s1, &s2), t2))
+                /* infer the type of the variable's value
+                 * apply the resulting sub to env
+                 * function that takes in a pattern and a type and returns an env
+                 * concat our two envs
+                 * infer the type of the body with the new env
+                 * combine the subs and return the body type
+                */
         },
-        Expr::Let(..) => todo!(),
         Expr::Function(p, b) => {
             let tvs = p.bound_vars();
             let typed_pattern : HashMap<_, _> = tvs.iter().map(|tv| (tv.clone(), Scheme(HashSet::new(), Type::Variable(t.fresh())))).collect();

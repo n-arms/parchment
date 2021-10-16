@@ -3,6 +3,8 @@ use std::fmt;
 use rand::prelude::*;
 use im::hashmap::HashMap;
 use im::hashset::HashSet;
+use super::types::{Type, Scheme, Env};
+use super::infer::TypeError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -21,7 +23,7 @@ impl Pattern {
                     }).collect()
         }
     }
-    pub fn into_type(&self, env: &HashMap<String, super::types::Type>) -> super::types::Type {
+    pub fn into_type(&self, env: &HashMap<String, Type>) -> Type {
         match self {
             Pattern::Variable(s) => env.get(s).unwrap().clone(),
             Pattern::Record(r) =>
@@ -29,6 +31,35 @@ impl Pattern {
                     r.iter()
                         .map(|(k, v)| (k.clone(), v.into_type(env)))
                         .collect())
+        }
+    }
+    pub fn into_env(&self, env: &Env, target: &Type) -> Result<Env, TypeError> {
+        match self {
+            Pattern::Variable(s) => Ok(Env(HashMap::unit(s.clone(), target.generalize(env)))),
+            Pattern::Record(r1) => match target {
+                Type::Record(r2) => {
+                    /*
+                    Ok(Env(r1.iter()
+                        .map(|(f, p)| p.into_env(env, r2.get(f).unwrap()).unwrap().0)
+                        .flat_map(|x| x)
+                        .collect()))
+                        */
+                    r1.iter()
+                        .map(|(f, p)| {
+                            let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
+                            p.into_env(env, nt)
+                        }) // list of Result<Env, TypeError>
+                        .fold(Ok(HashMap::new()), |mut acc : Result<_, TypeError>, x| {
+                            let x = x?;
+                            acc.as_mut()
+                                .map(|e| e.extend(x.0))
+                                .map_err(|e| e.clone())?;
+                            acc
+                        })
+                        .map(|e| Env(e))
+                },
+                _ => Err(TypeError::IsntRecord(target.clone()))
+            }
         }
     }
 }
