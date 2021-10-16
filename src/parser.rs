@@ -134,9 +134,32 @@ pub fn parse_parens<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), Pars
     Ok((e, tokens))
 }
 
+pub fn parse_pattern_record<'a>(tokens: &'a [Token]) -> Result<(Pattern, &'a [Token]), ParseError> {
+    expect!(Token::LBrace, tokens);
+    let mut rest = tokens;
+    let mut contents = HashMap::new();
+    loop {
+        if let Ok((field, tokens)) = parse_identifier(rest) {
+            if tokens.len() > 1 && tokens[0] == Token::Colon {
+                let (value, tokens) = parse_pattern(&tokens[1..])?;
+                rest = tokens;
+                contents.insert(field, value);
+            } else {
+                rest = tokens;
+                contents.insert(field.clone(), Pattern::Variable(field));
+            }
+        } else {break;}
+    }
+    expect!(Token::RBrace, rest);
+    Ok((Pattern::Record(contents), rest))
+}
+
 pub fn parse_pattern<'a>(tokens: &'a [Token]) -> Result<(Pattern, &'a [Token]), ParseError> {
-    let (v, tokens) = parse_identifier(tokens)?;
-    Ok((Pattern::Variable(v), tokens))
+    parse_pattern_record(tokens)
+        .or_else(|_| {
+            let (v, tokens) = parse_identifier(tokens)?;
+            Ok((Pattern::Variable(v), tokens))
+        })
 }
 
 fn make_fun(pats: &[Pattern], body: Expr) -> Expr {
@@ -258,6 +281,15 @@ mod test {
         assert_eq!(expr, Expr::Record(im::hashmap!{
             String::from("a") => Expr::Number(1.),
             String::from("b") => Expr::Number(2.)
+        }));
+    }
+    #[test]
+    fn parse_patterns() {
+        let (p, _) = parse_pattern(&scan("a")).unwrap();
+        assert_eq!(p, Pattern::Variable(String::from("a")));
+        let (p, _) = parse_pattern(&scan("{a:a}")).unwrap();
+        assert_eq!(p, Pattern::Record(im::hashmap!{
+            String::from("a") => Pattern::Variable(String::from("a"))
         }));
     }
 }

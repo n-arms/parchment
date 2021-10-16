@@ -2,10 +2,35 @@ use std::cmp;
 use std::fmt;
 use rand::prelude::*;
 use im::hashmap::HashMap;
+use im::hashset::HashSet;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
-    Variable(String)
+    Variable(String),
+    Record(HashMap<String, Pattern>)
+}
+
+impl Pattern {
+    pub fn bound_vars(&self) -> HashSet<String> {
+        match self {
+            Pattern::Variable(s) => HashSet::unit(s.clone()),
+            Pattern::Record(r) => 
+                r.values()
+                    .flat_map(|p| {
+                        p.bound_vars()
+                    }).collect()
+        }
+    }
+    pub fn into_type(&self, env: &HashMap<String, super::types::Type>) -> super::types::Type {
+        match self {
+            Pattern::Variable(s) => env.get(s).unwrap().clone(),
+            Pattern::Record(r) =>
+                super::types::Type::Record(
+                    r.iter()
+                        .map(|(k, v)| (k.clone(), v.into_type(env)))
+                        .collect())
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -74,7 +99,8 @@ impl Expr {
 impl fmt::Display for Pattern {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Pattern::Variable(v) => write!(f, "{}", v)
+            Pattern::Variable(v) => write!(f, "{}", v),
+            Pattern::Record(r) => write!(f, "{:?}", r),
         }
     }
 }

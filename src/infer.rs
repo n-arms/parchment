@@ -64,16 +64,6 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             // combine the 3 subs, then return the new type var
             Ok((combine(&combine(&s3, &s2), &s1), tv.apply(&s3)))
         },
-        Expr::Function(Pattern::Variable(p), b) => {
-            let tv = t.fresh(); // generate a new type var
-            // tell env that the variable p is of type tv
-            let env1 = env.0.update(p, Scheme(HashSet::new(), Type::Variable(tv.clone())));
-            // infer the type of the body under the new env
-            let (s1, t1) = infer(&Env(env1), t, *b)?;
-            // return an arrow from the type var to the infered type
-            let t2 = Type::Arrow(Box::new(Type::Variable(tv).apply(&s1)), Box::new(t1));
-            Ok((s1, t2))
-        },
         Expr::Number(_) => Ok((HashMap::new(), Type::Number)), // fairly trivial
         Expr::Variable(v) => {
             let t = env.0.get(&v)
@@ -87,6 +77,22 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             let t0 = t1.generalize(&env1);
             let (s2, t2) = infer(&Env(env1.0.update(p, t0)), t, *e)?;
             Ok((combine(&s1, &s2), t2))
+        },
+        Expr::Let(..) => todo!(),
+        Expr::Function(p, b) => {
+            let tvs = p.bound_vars();
+            let typed_pattern : HashMap<_, _> = tvs.iter().map(|tv| (tv.clone(), Scheme(HashSet::new(), Type::Variable(t.fresh())))).collect();
+            let env1 = Env(typed_pattern.clone().union(env.0.clone()));
+            let (s1, t1) = infer(&env1, t, *b)?;
+            let t2 = p.into_type(&typed_pattern.iter().map(|(k, v)| (k.clone(), v.apply(&s1).instantiate(t))).collect());
+            Ok((s1.clone(), Type::Arrow(Box::new(t2.apply(&s1)), Box::new(t1.apply(&s1)))))
+            /*
+             * function free_vars for all patterns
+             * add all free vars to env
+             * let t1 be the infered type of the body with the new env
+             * convert the pattern into a type t2
+             * return an arrow from t2 to t1
+            */
         },
         Expr::Record(r) => {
             let (s, rt) = r.iter()

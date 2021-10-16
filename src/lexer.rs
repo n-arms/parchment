@@ -56,7 +56,14 @@ pub fn scan(prog: &str) -> Vec<Token> {
             c => {
                 if c.is_alphabetic() {
                     let mut buf = String::new();
-                    while text.len() > 0 && text[0] != ' ' && text[0] != ')' && text[0] != ')' && text[0] != ':' && text[0] != '=' {
+                    while text.len() > 0 
+                            && text[0] != ' ' 
+                            && text[0] != ')' 
+                            && text[0] != '(' 
+                            && text[0] != '}' 
+                            && text[0] != '{' 
+                            && text[0] != ':' 
+                            && text[0] != '=' {
                         buf.push(text[0]);
                         text = &text[1..];
                     }
