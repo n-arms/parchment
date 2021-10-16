@@ -1,5 +1,6 @@
 use super::expr::{Expr, Pattern};
 use super::token::Token;
+use im::hashmap::HashMap;
 
 macro_rules! expect {
     ($token:expr, $tokens:ident) => {
@@ -21,6 +22,28 @@ pub enum ParseError {
     UnexpectedToken(Token, Token)
 }
 
+pub fn parse_record<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
+    expect!(Token::LBrace, tokens);
+    let mut contents : HashMap<String, Expr> = HashMap::new();
+    let mut rest = tokens;
+    loop {
+        if let Ok((field, tokens)) = parse_identifier(rest) {
+            expect!(Token::Colon, tokens);
+            let (value, tokens) = parse_expr(tokens)?;
+            contents = contents.update(field, value);
+            if tokens.len() == 0 {return Err(ParseError::UnexpectedEof);}
+            if tokens[0] == Token::RBrace {
+                return Ok((Expr::Record(contents), &tokens[1..]));
+            }
+            expect!(Token::Comma, tokens);
+            rest = tokens;
+        } else {
+            expect!(Token::RBrace, rest);
+            return Ok((Expr::Record(contents), rest));
+        }
+    }
+}
+
 pub fn parse_let<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
     expect!(Token::Let, tokens);
     let (pat, tokens) = parse_pattern(tokens)?;
@@ -32,13 +55,13 @@ pub fn parse_let<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseEr
 }
 
 pub fn parse_expr<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
-    println!("calling parse expr with tokens {:?}", tokens);
     parse_application(tokens)
         .or_else(|_| parse_not_app(tokens))
 }
 
 pub fn parse_not_app<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
     parse_variable(tokens)
+        .or_else(|_| parse_record(tokens))
         .or_else(|_| parse_number(tokens))
         .or_else(|_| parse_parens(tokens))
         .or_else(|_| parse_let(tokens))
@@ -85,24 +108,19 @@ pub fn make_app(terms: &[Expr]) -> Expr {
 }
 
 pub fn parse_application<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
-    println!("calling parse application with tokens {:?}", tokens);
     let mut terms : Vec<Expr> = Vec::new();
     let mut tokens = tokens;
     loop {
         let r = parse_not_app(tokens);
-        println!("parsed non-application {:?}", r);
         if let Ok((temp, rest)) = r {
             tokens = rest;
             terms.push(temp);
         } else if let Err(_) = r {
             if terms.len() == 0 {
-                println!("applications length was 0, returning error");
                 return r;
             } else if terms.len() == 1 {
-                println!("application of length 1, returning single terminal");
                 return Ok((terms[0].clone(), tokens));
             } else {
-                println!("application of length {}, building an application", terms.len());
                 return Ok((make_app(&terms[..]), tokens));
             }
         }
@@ -213,14 +231,33 @@ mod test {
     #[test]
     fn parse_rassoc() {
         let (e1, _) = parse_expr(&scan("(a b) c")).unwrap();
-        println!("");
         let (e2, _) = parse_expr(&scan("a b c")).unwrap();
-        println!("");
         assert_eq!(e1, e2);
     }
     #[test]
     fn make_app_rassoc() {
         let a = make_app(&[Expr::Number(0.), Expr::Number(1.), Expr::Number(2.)]);
         assert_eq!(a, Expr::Application(Box::new(Expr::Application(Box::new(Expr::Number(0.)), Box::new(Expr::Number(1.)))), Box::new(Expr::Number(2.))))
+    }
+    #[test]
+    fn parse_record() {
+        let (expr, _) = parse_expr(&scan("{}")).unwrap();
+        assert_eq!(expr, Expr::Record(im::hashmap!{}));
+
+        let (expr, _) = parse_expr(&scan("{a:1}")).unwrap();
+        assert_eq!(expr, Expr::Record(im::hashmap!{
+            String::from("a") => Expr::Number(1.)
+        }));
+
+        let (expr, _) = parse_expr(&scan("{a:1,}")).unwrap();
+        assert_eq!(expr, Expr::Record(im::hashmap!{
+            String::from("a") => Expr::Number(1.)
+        }));
+
+        let (expr, _) = parse_expr(&scan("{a:1, b:2}")).unwrap();
+        assert_eq!(expr, Expr::Record(im::hashmap!{
+            String::from("a") => Expr::Number(1.),
+            String::from("b") => Expr::Number(2.)
+        }));
     }
 }

@@ -1,6 +1,7 @@
 use std::cmp;
 use std::fmt;
 use rand::prelude::*;
+use im::hashmap::HashMap;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -14,6 +15,7 @@ pub enum Expr {
     Number(f64),
     Variable(String),
     Let(Pattern, Box<Expr>, Box<Expr>),
+    Record(HashMap<String, Expr>),
 }
 
 impl cmp::PartialEq for Expr {
@@ -34,6 +36,9 @@ impl cmp::PartialEq for Expr {
             Expr::Let(p, v, e) => if let Expr::Let(p1, v1, e1) = other {
                 p == p1 && v == v1 && e == e1
             } else {false},
+            Expr::Record(r) => if let Expr::Record(r1) = other {
+                r == r1
+            } else {false},
         }
     }
 }
@@ -48,6 +53,7 @@ impl fmt::Display for Expr {
             Expr::Number(n) => write!(f, "{}", n),
             Expr::Variable(v) => write!(f, "{}", v),
             Expr::Let(p, v, e) => write!(f, "let {} = {} in {}", p, v, e),
+            Expr::Record(r) => write!(f, "{:?}", r)
         }
     }
 }

@@ -23,11 +23,12 @@ impl TypeVarSet {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Type {
     Variable(String),
     Arrow(Box<Type>, Box<Type>),
-    Number
+    Number,
+    Record(HashMap<String, Type>)
 }
 
 impl Type {
@@ -46,7 +47,8 @@ impl Type {
             expr::Expr::Number(_) => self == &Type::Number,
             expr::Expr::Variable(v) => 
                 env.0.get(&v).map(|t| &t.instantiate(tv) == self).unwrap_or(false),
-            expr::Expr::Let(p, v, e) => todo!()
+            expr::Expr::Let(p, v, e) => todo!(),
+            expr::Expr::Record(r) => todo!()
         }
     }
 }
@@ -56,7 +58,8 @@ impl fmt::Display for Type {
         match self {
             Type::Variable(v) => write!(f, "{}", v),
             Type::Arrow(l, r) => write!(f, "({} -> {})", *l, *r),
-            Type::Number => write!(f, "Num")
+            Type::Number => write!(f, "Num"),
+            Type::Record(r) => write!(f, "{:?}", r)
         }
     }
 }
@@ -98,14 +101,21 @@ impl Substable for Type {
                 s.get(v)
                     .map(|x| x.apply(s)) // dont forget to recurse here, it is a major bug source
                     .unwrap_or(Type::Variable(v.clone())),
-            Type::Number => Type::Number
+            Type::Number => Type::Number,
+            Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), v.apply(s))).collect())
         }
     }
     fn free_type_vars(&self) -> HashSet<String> {
         match self {
             Type::Arrow(l, r) => l.free_type_vars().union(r.free_type_vars()),
             Type::Number => HashSet::new(),
-            Type::Variable(v) => HashSet::unit(v.clone())
+            Type::Variable(v) => HashSet::unit(v.clone()),
+            Type::Record(r) => 
+                r.values()
+                    .fold(HashSet::new(), |mut acc, x| {
+                        acc.extend(x.free_type_vars());
+                        acc
+                    })
         }
     }
 }
@@ -192,6 +202,13 @@ mod test {
                     Box::new(Type::Variable(String::from("a"))),
                     Box::new(Type::Variable(String::from("b")))))
             .free_type_vars(), HashSet::unit(String::from("b")));
+        assert_eq!(
+            Scheme(
+                HashSet::unit(String::from("a")),
+                Type::Record(im::hashmap!{
+                    String::from("left") => Type::Variable(String::from("a")),
+                    String::from("right") => Type::Variable(String::from("b"))}))
+            .free_type_vars(), HashSet::unit(String::from("b")));
     }
     #[test]
     fn sub_mono() {
@@ -214,6 +231,15 @@ mod test {
                         Box::new(Type::Variable(String::from("0"))),
                         Box::new(Type::Variable(String::from("b"))))),
                 Box::new(Type::Variable(String::from("0")))));
+        assert_eq!(
+            Type::Record(im::hashmap!{
+                String::from("left") => Type::Variable(String::from("a")),
+                String::from("right") => Type::Variable(String::from("b"))
+            }).apply(&s),
+            Type::Record(im::hashmap!{
+                String::from("left") => Type::Variable(String::from("0")),
+                String::from("right") => Type::Variable(String::from("b"))
+            }));
     }
     #[test]
     fn sub_poly() {

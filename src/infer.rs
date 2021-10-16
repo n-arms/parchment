@@ -7,7 +7,9 @@ use im::hashset::HashSet;
 pub enum TypeError {
     UnknownVar(String),
     UnificationFail(Type, Type),
-    InfiniteType(String, Type)
+    InfiniteType(String, Type),
+    IncompatibleRecordTypes(HashMap<String, Type>, HashMap<String, Type>),
+    MissingRecordField(String)
 }
 
 fn combine(s1: &Subst, s2: &Subst) -> Subst {
@@ -33,6 +35,20 @@ pub fn unify(t1: Type, t2: Type) -> Result<Subst, TypeError> {
                 Ok(HashMap::unit(a, t))
             },
         (Type::Number, Type::Number) => Ok(HashMap::new()),
+        (Type::Record(r1), Type::Record(r2)) => 
+            r1.iter()
+                .map(|(k, t1)| {
+                    let t2 = r2.get(k).map(|t2| Ok(t2)).unwrap_or(Err(TypeError::MissingRecordField(k.clone())))?;
+                    unify(t1.clone(), t2.clone())
+                })
+                .fold(Ok(HashMap::new()), |mut acc, x| {
+                    let x = x?;
+                    acc
+                        .as_mut()
+                        .map(|acc| acc.extend(x))
+                        .map_err(|e| e.clone())?;
+                    acc
+                }),
         (t1, t2) => Err(TypeError::UnificationFail(t1, t2))
     }
 }
@@ -71,7 +87,24 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             let t0 = t1.generalize(&env1);
             let (s2, t2) = infer(&Env(env1.0.update(p, t0)), t, *e)?;
             Ok((combine(&s1, &s2), t2))
-        }
+        },
+        Expr::Record(r) => {
+            let (s, rt) = r.iter()
+                .map(|(k, v)| (k, infer(env, t, v.clone()))) // an iter over (String, Result<(Subst, Type), TypeError>)
+                .fold(Ok((HashMap::new(), HashMap::new())), |mut acc : Result<_, TypeError>, (k, v)| {
+                    acc
+                        .as_mut()
+                        .map_err(|e| e.clone())
+                        .and_then(|acc| {
+                            v.map(|(st, t)| {
+                                acc.0.extend(st);
+                                acc.1.insert(k.clone(), t);
+                            })
+                        })?;
+                    acc
+                })?;
+            Ok((s, Type::Record(rt)))
+        },
     }
 }
 
@@ -191,6 +224,10 @@ mod test {
             (Type::Variable(String::from("a")), Type::Variable(String::from("a"))),
             (Type::Variable(String::from("a")), Type::Number),
             (Type::Variable(String::from("a")), Type::Variable(String::from("b"))),
+            (Type::Variable(String::from("a")), Type::Record(im::hashmap!{
+                String::from("value") => Type::Number
+            })),
+            (Type::Variable(String::from("a")), Type::Record(HashMap::new())),
             (Type::Arrow(
                     Box::new(Type::Variable(String::from("a"))),
                     Box::new(Type::Variable(String::from("b")))), Type::Variable(String::from("c")))
@@ -218,6 +255,13 @@ mod test {
                     Type::Arrow(
                         Box::new(Type::Variable(String::from("a"))),
                         Box::new(Type::Number))), Err(TypeError::InfiniteType(_, _))));
+        assert!(matches!(
+                unify(
+                    Type::Record(im::hashmap!{
+                        String::from("value") => Type::Variable(String::from("a"))
+                    }),
+                    Type::Variable(String::from("a"))),
+                    Err(TypeError::InfiniteType(..))));
     }
     #[test]
     fn infer_tricky_expr() {
@@ -249,5 +293,16 @@ mod test {
             Type::Arrow(t0, t1) if t0 == t1 => (),
             _ => panic!()
         }
+    }
+    #[test]
+    fn infer_record() {
+        let t = infer_type(parse_expr(&scan("{}")).unwrap().0).unwrap();
+        assert_eq!(t, Type::Record(HashMap::new()));
+
+        let t = infer_type(parse_expr(&scan("{a:1, b:2}")).unwrap().0).unwrap();
+        assert_eq!(t, Type::Record(im::hashmap!{
+            String::from("a") => Type::Number,
+            String::from("b") => Type::Number
+        }));
     }
 }

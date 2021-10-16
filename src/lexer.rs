@@ -12,6 +12,10 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::Lpar);
                 text = &text[1..];
             },
+            ',' => {
+                out.push(Token::Comma);
+                text = &text[1..];
+            },
             ')' => {
                 out.push(Token::Rpar);
                 text = &text[1..];
@@ -36,11 +40,23 @@ pub fn scan(prog: &str) -> Vec<Token> {
             '=' => {
                 out.push(Token::Eqs);
                 text = &text[1..];
-            }
+            },
+            '{' => {
+                out.push(Token::LBrace);
+                text = &text[1..];
+            },
+            '}' => {
+                out.push(Token::RBrace);
+                text = &text[1..];
+            },
+            ':' => {
+                out.push(Token::Colon);
+                text = &text[1..];
+            },
             c => {
                 if c.is_alphabetic() {
                     let mut buf = String::new();
-                    while text.len() > 0 && text[0] != ' ' && text[0] != ')' && text[0] != ')' {
+                    while text.len() > 0 && text[0] != ' ' && text[0] != ')' && text[0] != ')' && text[0] != ':' && text[0] != '=' {
                         buf.push(text[0]);
                         text = &text[1..];
                     }

@@ -16,7 +16,11 @@ pub enum Token {
     Number(f64),
     Let,
     Eqs,
-    In
+    In,
+    LBrace,
+    RBrace,
+    Colon,
+    Comma
 }
 
 impl cmp::PartialEq for Token {
@@ -35,6 +39,10 @@ impl cmp::PartialEq for Token {
             Token::Let => matches!(Token::Let, other),
             Token::Eqs => matches!(Token::Eqs, other),
             Token::In => matches!(Token::In, other),
+            Token::LBrace => matches!(Token::LBrace, other),
+            Token::RBrace => matches!(Token::RBrace, other),
+            Token::Colon => matches!(Token::Colon, other),
+            Token::Comma => matches!(Token::Comma, other),
         }
     }
 }
