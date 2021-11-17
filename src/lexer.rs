@@ -53,6 +53,18 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::False);
                 text = &text[5..];
             },
+            'm' if text.len() > 4 && text[1] == 'a' && text[2] == 't' && text[3] == 'c' && text[4] == 'h' => {
+                out.push(Token::Match);
+                text = &text[5..];
+            },
+            'w' if text.len() > 3 && text[1] == 'i' && text[2] == 't' && text[3] == 'h' => {
+                out.push(Token::With);
+                text = &text[4..];
+            },
+            'e' if text.len() > 2 && text[1] == 'n' && text[2] == 'd' => {
+                out.push(Token::End);
+                text = &text[3..];
+            },
             'i' if text.len() > 3 && text[1] == 'n' && text[2] == ' ' => {
                 out.push(Token::In);
                 text = &text[3..];
@@ -83,6 +95,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
                             && text[0] != '}' 
                             && text[0] != '{' 
                             && text[0] != ':' 
+                            && text[0] != ',' 
                             && text[0] != '=' {
                         buf.push(text[0]);
                         text = &text[1..];
@@ -95,6 +108,8 @@ pub fn scan(prog: &str) -> Vec<Token> {
                         text = &text[1..];
                     }
                     out.push(Token::Number(buf.parse().unwrap()));
+                } else {
+                    panic!("found illegal char")
                 }
             }
         }

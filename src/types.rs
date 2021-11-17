@@ -52,7 +52,8 @@ impl Type {
                 env.0.get(&v).map(|t| &t.instantiate(tv) == self).unwrap_or(false),
             expr::Expr::Let(..) => todo!(),
             expr::Expr::Record(_) => todo!(),
-            expr::Expr::If(..) => todo!()
+            expr::Expr::If(..) => todo!(),
+            expr::Expr::Match(..) => todo!(),
         }
     }
 }
@@ -65,7 +66,7 @@ impl fmt::Display for Type {
             Type::Number => write!(f, "Num"),
             Type::Boolean => write!(f, "Bool"),
             Type::Record(r) => write!(f, "{:?}", r),
-            Type::Or(l, r) => write!(f, "{} | {}", *l, *r)
+            Type::Or(l, r) => write!(f, "({} | {})", *l, *r)
         }
     }
 }

@@ -25,7 +25,10 @@ pub enum Token {
     Then,
     Else,
     True,
-    False
+    False,
+    Match,
+    With,
+    End
 }
 
 impl cmp::PartialEq for Token {
@@ -53,6 +56,9 @@ impl cmp::PartialEq for Token {
             Token::Else => matches!(Token::Else, other),
             Token::True => matches!(Token::True, other),
             Token::False => matches!(Token::False, other),
+            Token::Match => matches!(Token::Match, other),
+            Token::With => matches!(Token::With, other),
+            Token::End => matches!(Token::End, other),
         }
     }
 }

@@ -22,6 +22,27 @@ pub enum ParseError {
     UnexpectedToken(Token, Token)
 }
 
+pub fn parse_match<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
+    expect!(Token::Match, tokens);
+    let (m, tokens) = parse_expr(tokens)?;
+    expect!(Token::With, tokens);
+    let mut rest = tokens;
+    let mut contents : Vec<(Pattern, Expr)> = Vec::new();
+    loop {
+        let (p, tokens) = parse_pattern(rest)?;
+        expect!(Token::Rarrow, tokens);
+        let (e, tokens) = parse_expr(tokens)?;
+        if tokens.len() == 0 {return Err(ParseError::UnexpectedEof)}
+        contents.push((p, e));
+        rest = tokens;
+        if tokens[0] != Token::Comma {break}
+        rest = &tokens[1..];
+    }
+    if rest.len() == 0 {return Err(ParseError::UnexpectedEof);}
+    expect!(Token::End, rest);
+    Ok((Expr::Match(Box::new(m), contents), rest))
+}
+
 pub fn parse_if<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
     expect!(Token::If, tokens);
     let (p, tokens) = parse_expr(tokens)?;
@@ -91,6 +112,7 @@ pub fn parse_not_app<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), Par
         .or_else(|_| parse_let(tokens))
         .or_else(|_| parse_if(tokens))
         .or_else(|_| parse_function(tokens))
+        .or_else(|_| parse_match(tokens))
 }
 
 pub fn parse_identifier<'a>(tokens: &'a [Token]) -> Result<(String, &'a [Token]), ParseError> {

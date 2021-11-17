@@ -19,11 +19,12 @@ fn combine(s1: &Subst, s2: &Subst) -> Subst {
         .union(s2.clone())
 }
 
-pub fn unify(t1: Type, t2: Type) -> Result<Subst, TypeError> {
-    match (t1, t2) { (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
-            let s1 = unify(l1.as_ref().clone(), l2.as_ref().clone())?;
+pub fn unify(general: Type, specific: Type) -> Result<Subst, TypeError> {
+    match (general, specific) {
+        (Type::Arrow(lg, rg), Type::Arrow(ls, rs)) => {
+            let s1 = unify(lg.as_ref().clone(), ls.as_ref().clone())?;
             // let s1 = unify(*l1, *l2)?;
-            let s2 = unify(r1.apply(&s1), r2.apply(&s1))?;
+            let s2 = unify(rg.apply(&s1), rs.apply(&s1))?;
             Ok(combine(&s2, &s1))
         },
         (Type::Variable(a), t) | (t, Type::Variable(a)) =>
@@ -50,6 +51,12 @@ pub fn unify(t1: Type, t2: Type) -> Result<Subst, TypeError> {
                         .map_err(|e| e.clone())?;
                     acc
                 }),
+        (Type::Or(l, r), t) => {
+            let sl = unify(*l.clone(), t.clone())?;
+            let sr = unify(*r.clone(), t)?;
+            let st = unify(l.apply(&sl), r.apply(&sr))?;
+            Ok(combine(&combine(&sl, &sr), &st))
+        },
         (t1, t2) => Err(TypeError::UnificationFail(t1, t2))
     }
 }
@@ -61,6 +68,8 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             let (s1, t1) = infer(env, t, *l)?; // infer the left side
             let (s2, t2) = infer(&env.apply(&s1), t, *r)?; // infer the right side
             // unify the left side with an arrow from a right side to a tv
+            // if the left side is a (int | bool) -> int and the right side is bool, then thats fine
+            // the general type is on the left
             let s3 = unify(t1.apply(&s2), Type::Arrow(Box::new(t2), Box::new(tv.clone())))?;
             // combine the 3 subs, then return the new type var
             Ok((combine(&combine(&s3, &s2), &s1), tv.apply(&s3)))
@@ -72,6 +81,25 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
                 .map(|s| s.instantiate(t))
                 .ok_or(TypeError::UnknownVar(v))?;
             Ok((HashMap::new(), t)) // again, simple
+        },
+        Expr::Match(m, l) => {
+            let (sm, tm) = infer(env, t, *m)?;
+            let env1 = env.apply(&sm);
+            let mut terms : Vec<(Subst, Type)> = vec![];
+            for (p, e) in l {
+                let envp = p.into_env_match(&env1, &tm)?;
+                let (s2, t2) = infer(&Env(envp.0.union(env1.0.clone())), t, e)?;
+                terms.push((combine(&s2, &sm), t2));
+            }
+            /* infer the type of the match term
+             * unify the match term type with each pattern
+             * infer the type of the expression with the bound match terms
+            */
+            println!(
+                r#"infered type of match with infered terms {:#?}
+    match type {} and match sub {:#?}"#, 
+                terms, tm, sm);
+            Ok((combine(&sm, &terms[0].0), terms[0].1.apply(&terms[0].0).apply(&sm)))
         },
         Expr::Let(p, v, e) => {
             let (s1, t1) = infer(env, t, *v)?;
@@ -120,14 +148,15 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
             Ok((s, Type::Record(rt)))
         },
         Expr::If(p, e1, e2) => {
-            let (sp, tp) = infer(env, t, *p)?;
-            let (s1, t1) = infer(env, t, *e1)?;
-            let (s2, t2) = infer(env, t, *e2)?;
-            let s3 = unify(tp.apply(&sp), Type::Boolean)?;
-            if let Ok(s4) = unify(t1.apply(&s1), t2.apply(&s2)) {
-                Ok((combine(&combine(&combine(&combine(&sp, &s1), &s2), &s3), &s4), t1))
+            let (sp, tp) = infer(env, t, *p)?; // infer the predicate
+            let (s1, t1) = infer(env, t, *e1)?; // infer the consequent
+            let (s2, t2) = infer(env, t, *e2)?; // infer the alternative
+            let s3 = unify(tp.apply(&sp), Type::Boolean)?; // the predicate is of type boolean
+            let s_total = combine(&combine(&sp, &s1), &combine(&s2, &s3));
+            if let Ok(s4) = unify(t1.apply(&s_total), t2.apply(&s_total)) {
+                Ok((combine(&s_total, &s4), t1))
             } else {
-                Ok((combine(&combine(&combine(&sp, &s1), &s2), &s3), Type::Or(Box::new(t1), Box::new(t2))))
+                Ok((s_total, Type::Or(Box::new(t1), Box::new(t2))))
             }
         },
     }
@@ -329,5 +358,35 @@ mod test {
             String::from("a") => Type::Number,
             String::from("b") => Type::Number
         }));
+    }
+    #[test]
+    fn infer_fails() {
+        let t = infer_type(parse_expr(&scan("fn x -> if x then x else 3")).unwrap().0);
+        assert!(matches!(t, Err(_)));
+    }
+    #[test]
+    fn infer_match() {
+        let t = infer_type(parse_expr(&scan("fn x -> match x with x -> x end")).unwrap().0).unwrap();
+        match t {
+            Type::Arrow(l, r) if l == r && matches!(*l, Type::Variable(_)) => (),
+            _ => panic!("{:?}", t)
+        }
+
+        let t = infer_type(parse_expr(&scan("fn x -> match x with n -> if n then 3 else 4 end")).unwrap().0).unwrap();
+        match t {
+            Type::Arrow(l, r) if *l == Type::Boolean && *r == Type::Number => (),
+            _ => panic!("{:?}", t)
+        }
+    }
+    #[test]
+    fn infer_if() {
+        let t = infer_type(parse_expr(&scan("fn x -> if x then 3 else x")).unwrap().0).unwrap();
+        match t {
+            Type::Arrow(l, r) if *l == Type::Boolean =>
+                if let Type::Or(b, n) = *r {
+                    assert!((matches!(*b, Type::Boolean) && matches!(*n, Type::Number)) || (matches!(*b, Type::Number) && matches!(*n, Type::Boolean)));
+                } else {panic!("{:?}", Type::Arrow(l, r))},
+            _ => panic!("{:?}", t)
+        }
     }
 }
