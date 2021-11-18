@@ -9,7 +9,8 @@ pub enum TypeError {
     UnificationFail(Type, Type),
     InfiniteType(String, Type),
     MissingRecordField(String),
-    IsntRecord(Type)
+    IsntRecord(Type),
+    EmptyMatch
 }
 
 fn combine(s1: &Subst, s2: &Subst) -> Subst {
@@ -77,35 +78,46 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
         Expr::Number(_) => Ok((HashMap::new(), Type::Number)), // fairly trivial
         Expr::Boolean(_) => Ok((HashMap::new(), Type::Boolean)), // fairly trivial
         Expr::Variable(v) => {
-            let t = env.0.get(&v)
-                .map(|s| s.instantiate(t))
+            let sigma = env.0.get(&v)
                 .ok_or(TypeError::UnknownVar(v))?;
-            Ok((HashMap::new(), t)) // again, simple
+            Ok((HashMap::new(), sigma.instantiate(t))) // again, simple
         },
         Expr::Match(m, l) => {
             let (sm, tm) = infer(env, t, *m)?;
             let env1 = env.apply(&sm);
-            let mut terms : Vec<(Subst, Type)> = vec![];
-            for (p, e) in l {
-                let envp = p.into_env_match(&env1, &tm)?;
-                let (s2, t2) = infer(&Env(envp.0.union(env1.0.clone())), t, e)?;
-                terms.push((combine(&s2, &sm), t2));
+            let mut terms: Vec<(Subst, Type)> = Vec::new();
+            for (p, e) in l { // iterate over the patterns and expressions
+                match p {
+                    Pattern::Variable(v) => {
+                        let t0 = tm.generalize(&env1);
+                        let (s1, t1) = infer(&Env(env1.0.update(v.clone(), t0)), t, e)?;
+                        let s2 = combine(&s1, &HashMap::unit(v, tm.clone()));
+                        terms.push((s2, t1));
+                    }
+                    Pattern::Record(_) => todo!()
+                }
             }
-            /* infer the type of the match term
-             * unify the match term type with each pattern
-             * infer the type of the expression with the bound match terms
-            */
-            println!(
-                r#"infered type of match with infered terms {:#?}
-    match type {} and match sub {:#?}"#, 
-                terms, tm, sm);
-            Ok((combine(&sm, &terms[0].0), terms[0].1.apply(&terms[0].0).apply(&sm)))
+
+            let (s_total, t_total) = terms
+                .into_iter()
+                .fold((HashMap::new(), None), |(s_acc, t_acc), (s, t)| (
+                        combine(&s_acc, &s), 
+                        Some(match t_acc {
+                            Some(t_acc) => Type::Or(Box::new(t_acc), Box::new(t)),
+                            None => t
+                        })));
+
+            let s = combine(&sm, &s_total);
+            Ok((s.clone(), t_total.ok_or(TypeError::EmptyMatch)?.apply(&s)))
         },
         Expr::Let(p, v, e) => {
             let (s1, t1) = infer(env, t, *v)?;
-            let env1 = env.apply(&s1);
-            let env2 = p.into_env(env, &t1)?;
-            let (s2, t2) = infer(&Env(env2.0.union(env1.0)), t, *e)?;
+            let env1 = Env(env.0.clone().union(env.apply(&s1).0));
+            let env2 = p.into_env(&env1, &t1)?;
+            // let env2 = Env(HashMap::unit(p, t1.generalize(&env1)));
+            // let env2 = Env(HashMap::unit(p, Scheme(HashSet::new(), Type::Variable(String::from("1"))))); // generalize is too generalized
+            let env3 = Env(env2.0.union(env1.0));
+            let (s2, t2) = infer(&env3, t, *e)?;
             Ok((combine(&s1, &s2), t2))
                 /* infer the type of the variable's value
                  * apply the resulting sub to env
@@ -115,13 +127,19 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
                  * combine the subs and return the body type
                 */
         },
-        Expr::Function(p, b) => {
+        Expr::Function(Pattern::Variable(p), b) => {
+            let tv = t.fresh();
+            let env1 = Env(env.0.update(p, Scheme(HashSet::new(), Type::Variable(tv.clone()))));
+            let (s1, t1) = infer(&env1, t, *b)?;
+            Ok((s1.clone(), Type::Arrow(Box::new(Type::Variable(tv).apply(&s1)), Box::new(t1.apply(&s1)))))
+            /*
             let tvs = p.bound_vars();
             let typed_pattern : HashMap<_, _> = tvs.iter().map(|tv| (tv.clone(), Scheme(HashSet::new(), Type::Variable(t.fresh())))).collect();
             let env1 = Env(typed_pattern.clone().union(env.0.clone()));
             let (s1, t1) = infer(&env1, t, *b)?;
             let t2 = p.into_type(&typed_pattern.iter().map(|(k, v)| (k.clone(), v.apply(&s1).instantiate(t))).collect());
             Ok((s1.clone(), Type::Arrow(Box::new(t2.apply(&s1)), Box::new(t1.apply(&s1)))))
+            */
             /*
              * function free_vars for all patterns
              * add all free vars to env
@@ -159,6 +177,7 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
                 Ok((s_total, Type::Or(Box::new(t1), Box::new(t2))))
             }
         },
+        _ => todo!()
     }
 }
 
@@ -349,6 +368,11 @@ mod test {
         }
     }
     #[test]
+    fn infer_renaming_let() {
+        let t = infer_type(parse_expr(&scan("fn x -> let n = x in if n then 3 else 4")).unwrap().0).unwrap();
+        assert_eq!(t, Type::Arrow(Box::new(Type::Boolean), Box::new(Type::Number)));
+    }
+    #[test]
     fn infer_record() {
         let t = infer_type(parse_expr(&scan("{}")).unwrap().0).unwrap();
         assert_eq!(t, Type::Record(HashMap::new()));
@@ -360,11 +384,6 @@ mod test {
         }));
     }
     #[test]
-    fn infer_fails() {
-        let t = infer_type(parse_expr(&scan("fn x -> if x then x else 3")).unwrap().0);
-        assert!(matches!(t, Err(_)));
-    }
-    #[test]
     fn infer_match() {
         let t = infer_type(parse_expr(&scan("fn x -> match x with x -> x end")).unwrap().0).unwrap();
         match t {
@@ -373,9 +392,13 @@ mod test {
         }
 
         let t = infer_type(parse_expr(&scan("fn x -> match x with n -> if n then 3 else 4 end")).unwrap().0).unwrap();
+        assert_eq!(t, Type::Arrow(Box::new(Type::Boolean), Box::new(Type::Number)));
+
+        let t = infer_type(parse_expr(&scan("fn x -> match x with n -> if n then 3 else 4, m -> m")).unwrap().0).unwrap();
         match t {
-            Type::Arrow(l, r) if *l == Type::Boolean && *r == Type::Number => (),
+            Type::Arrow(l, r) if matches!(*l, Type::Variable(_)) && l == r => (),
             _ => panic!("{:?}", t)
+
         }
     }
     #[test]

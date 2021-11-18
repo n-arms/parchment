@@ -37,7 +37,8 @@ impl Type {
     pub fn generalize(&self, e: &Env) -> Scheme {
         Scheme(
             self.free_type_vars()
-                .relative_complement(e.0.keys().collect::<HashSet<_>>()),
+                //.relative_complement(e.0.keys().collect::<HashSet<_>>()),
+                .relative_complement(e.free_type_vars()),
             self.clone())
     }
     // in this case env is a map from variable names to types
@@ -308,7 +309,7 @@ mod test {
             Scheme(HashSet::new(), Type::Number));
         assert_eq!(
             Type::Variable(String::from("a")).generalize(&e),
-            Scheme(HashSet::new(), Type::Variable(String::from("a"))));
+            Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))));
         assert_eq!(
             Type::Variable(String::from("b")).generalize(&e),
             Scheme(HashSet::unit(String::from("b")), Type::Variable(String::from("b"))));

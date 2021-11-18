@@ -26,6 +26,7 @@ fn type_repl(line: &str) {
 }
 
 fn main() {
+    //type_repl("fn x -> match x with n -> if n then 3 else 4 end");
     print!("> ");
     io::stdout().flush().unwrap();
     let stdin = io::stdin();
