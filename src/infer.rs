@@ -2,6 +2,78 @@ use super::types::*;
 use super::expr::*;
 use im::hashmap::HashMap;
 use im::hashset::HashSet;
+use std::rc::Rc;
+use std::cell::{Cell, RefCell};
+
+pub type InferResult<T> = Result<T, TypeError>;
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct Infer {
+    subs: Rc<RefCell<HashMap<String, Type>>>, 
+    type_vars: Rc<Cell<usize>>,
+    env: HashMap<String, Scheme>
+}
+
+impl Infer {
+    pub fn new(subs: Rc<RefCell<HashMap<String, Type>>>, type_vars: Rc<Cell<usize>>, env: HashMap<String, Scheme>) -> Self {
+        Infer {
+            subs,
+            type_vars,
+            env
+        }
+    }
+
+    pub fn without_sub(&self, keys: HashSet<String>) -> Self {
+        let new_subs = keys.iter()
+            .fold(self.subs.borrow().clone(), |acc, x| acc.without(x));
+
+        Infer {
+            subs: Rc::new(RefCell::new(new_subs)),
+            type_vars: self.type_vars.clone(),
+            env: HashMap::new()
+        }
+    }
+
+    pub fn set_env(&self, var: String, scheme: Scheme) -> Self {
+        Infer {
+            subs: self.subs.clone(),
+            type_vars: self.type_vars.clone(),
+            env: self.env.update(var, scheme)
+        }
+    }
+
+    pub fn apply(&self, type_var: &str) -> Type {
+        self.subs.borrow().get(type_var).map(|t| t.apply(self)).unwrap_or(Type::Variable(type_var.to_string()))
+    }
+
+    pub fn add_sub(&self, type_var: String, type_val: Type) {
+        self.subs.replace_with(|subs| {
+            if subs.contains_key(&type_var) {
+                panic!("attempt to overwrite sub");
+            }
+            subs.update(type_var, type_val)
+        });
+    }
+
+    pub fn var_type(&self, var: &str) -> InferResult<Scheme> {
+        self.env.get(var).cloned().ok_or(TypeError::UnknownVar(var.to_string()))
+    }
+
+    pub fn free_in_env(&self) -> HashSet<String> {
+        self.env.values()
+            .fold(HashSet::new(), |mut acc, x| {
+                acc.extend(x.free_type_vars().iter());
+                acc
+            })
+    }
+
+    pub fn fresh(&self) -> String {
+        let old = self.type_vars.get();
+        self.type_vars.set(old + 1);
+        old.to_string()
+    }
+}
+
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TypeError {
@@ -13,133 +85,92 @@ pub enum TypeError {
     EmptyMatch
 }
 
-fn combine(s1: &Subst, s2: &Subst) -> Subst {
-    s1.iter()
-        .map(|(k, v)| (k.clone(), v.apply(s2)))
-        .collect::<Subst>()
-        .union(s2.clone())
-}
-
-pub fn unify(general: Type, specific: Type) -> Result<Subst, TypeError> {
-    match (general, specific) {
+pub fn unify(i: &Infer, general: Type, specific: Type) -> InferResult<()> {
+    match (general.apply(i), specific.apply(i)) {
         (Type::Arrow(lg, rg), Type::Arrow(ls, rs)) => {
-            let s1 = unify(lg.as_ref().clone(), ls.as_ref().clone())?;
-            // let s1 = unify(*l1, *l2)?;
-            let s2 = unify(rg.apply(&s1), rs.apply(&s1))?;
-            Ok(combine(&s2, &s1))
+            // let s1 = unify(lg.as_ref().clone(), ls.as_ref().clone())?;
+            unify(i, *lg, *ls)?;
+            unify(i, *rg, *rs)?;
+            Ok(())
         },
         (Type::Variable(a), t) | (t, Type::Variable(a)) =>
             if t == Type::Variable(a.clone()) {
-                Ok(HashMap::new())
+                Ok(())
             } else if t.contains_var(a.clone()) {
                 Err(TypeError::InfiniteType(a, t))
             } else {
-                Ok(HashMap::unit(a, t))
+                i.add_sub(a, t);
+                Ok(())
             },
-        (Type::Number, Type::Number) => Ok(HashMap::new()),
-        (Type::Boolean, Type::Boolean) => Ok(HashMap::new()),
+        (Type::Number, Type::Number) => Ok(()),
+        (Type::Boolean, Type::Boolean) => Ok(()),
         (Type::Record(r1), Type::Record(r2)) => 
             r1.iter()
                 .map(|(k, t1)| {
                     let t2 = r2.get(k).map(|t2| Ok(t2)).unwrap_or(Err(TypeError::MissingRecordField(k.clone())))?;
-                    unify(t1.clone(), t2.clone())
+                    unify(i, t1.clone(), t2.clone())
                 })
-                .fold(Ok(HashMap::new()), |mut acc, x| {
-                    let x = x?;
-                    acc
-                        .as_mut()
-                        .map(|acc| acc.extend(x))
-                        .map_err(|e| e.clone())?;
-                    acc
-                }),
+                .fold(Ok(()), |acc, x| acc.and_then(|_| x)),
         (Type::Or(l, r), t) => {
-            let sl = unify(*l.clone(), t.clone())?;
-            let sr = unify(*r.clone(), t)?;
-            let st = unify(l.apply(&sl), r.apply(&sr))?;
-            Ok(combine(&combine(&sl, &sr), &st))
+            unify(i, *l.clone(), t.clone())?;
+            unify(i, *r.clone(), t)?;
+            unify(i, *l, *r)?;
+            Ok(())
         },
         (t1, t2) => Err(TypeError::UnificationFail(t1, t2))
     }
 }
 
-pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), TypeError> {
+pub fn make_subset(i: &Infer, sub: Type, sup: Type) -> InferResult<()> {
+    unify(i, sup, sub)
+}
+
+pub fn infer(i: &Infer, e: Expr) -> InferResult<Type> {
+    println!("infer on expr {} with env {:?}\n", e, i.env);
     match e {
         Expr::Application(l, r) => {
-            let tv = Type::Variable(t.fresh()); // generate a new type var
-            let (s1, t1) = infer(env, t, *l)?; // infer the left side
-            let (s2, t2) = infer(&env.apply(&s1), t, *r)?; // infer the right side
+            let tv = Type::Variable(i.fresh()); // generate a new type var
+            let t1 = infer(i, *l)?; // infer the left side
+            let t2 = infer(i, *r)?; // infer the right side
             // unify the left side with an arrow from a right side to a tv
             // if the left side is a (int | bool) -> int and the right side is bool, then thats fine
             // the general type is on the left
-            let s3 = unify(t1.apply(&s2), Type::Arrow(Box::new(t2), Box::new(tv.clone())))?;
+            unify(i, t1, Type::Arrow(Box::new(t2), Box::new(tv.clone())))?;
+            println!("new subs is {:?}", i.subs);
             // combine the 3 subs, then return the new type var
-            Ok((combine(&combine(&s3, &s2), &s1), tv.apply(&s3)))
+            Ok(tv)
         },
-        Expr::Number(_) => Ok((HashMap::new(), Type::Number)), // fairly trivial
-        Expr::Boolean(_) => Ok((HashMap::new(), Type::Boolean)), // fairly trivial
+        Expr::Number(_) => Ok(Type::Number), // fairly trivial
+        Expr::Boolean(_) => Ok(Type::Boolean), // fairly trivial
         Expr::Variable(v) => {
-            let sigma = env.0.get(&v)
-                .ok_or(TypeError::UnknownVar(v))?;
-            Ok((HashMap::new(), sigma.instantiate(t))) // again, simple
+            let sigma = i.var_type(&v)?;
+            Ok(sigma.instantiate(i)) // again, simple
         },
         Expr::Match(m, l) => {
-            let (sm, tm) = infer(env, t, *m)?;
-            let env1 = env.apply(&sm);
-            let mut terms: Vec<(Subst, Type)> = Vec::new();
-            for (p, e) in l { // iterate over the patterns and expressions
-                match p {
-                    Pattern::Variable(v) => {
-                        let t0 = tm.generalize(&env1);
-                        let (s1, t1) = infer(&Env(env1.0.update(v.clone(), t0)), t, e)?;
-                        let s2 = combine(&s1, &HashMap::unit(v, tm.clone()));
-                        terms.push((s2, t1));
-                    }
-                    Pattern::Record(_) => todo!()
-                }
+            let mut terms: Vec<Type> = Vec::new();
+            for (p, e) in l {
+                let t1 = infer(i, Expr::Application(
+                        Box::new(Expr::Function(p, Box::new(e))), m.clone()))?;
+                terms.push(t1);
             }
-
-            let (s_total, t_total) = terms
+            let t_total = terms
                 .into_iter()
-                .fold((HashMap::new(), None), |(s_acc, t_acc), (s, t)| (
-                        combine(&s_acc, &s), 
-                        Some(match t_acc {
-                            Some(t_acc) => Type::Or(Box::new(t_acc), Box::new(t)),
-                            None => t
-                        })));
-
-            let s = combine(&sm, &s_total);
-            Ok((s.clone(), t_total.ok_or(TypeError::EmptyMatch)?.apply(&s)))
+                .fold(None, |acc, t| Some(match acc {
+                    Some(acc) => Type::Or(Box::new(acc), Box::new(t)),
+                    None => t
+                }));
+            Ok(t_total.ok_or(TypeError::EmptyMatch)?)
         },
-        Expr::Let(p, v, e) => {
-            let (s1, t1) = infer(env, t, *v)?;
-            let env1 = Env(env.0.clone().union(env.apply(&s1).0));
-            let env2 = p.into_env(&env1, &t1)?;
-            // let env2 = Env(HashMap::unit(p, t1.generalize(&env1)));
-            // let env2 = Env(HashMap::unit(p, Scheme(HashSet::new(), Type::Variable(String::from("1"))))); // generalize is too generalized
-            let env3 = Env(env2.0.union(env1.0));
-            let (s2, t2) = infer(&env3, t, *e)?;
-            Ok((combine(&s1, &s2), t2))
-                /* infer the type of the variable's value
-                 * apply the resulting sub to env
-                 * function that takes in a pattern and a type and returns an env
-                 * concat our two envs
-                 * infer the type of the body with the new env
-                 * combine the subs and return the body type
-                */
-        },
-        Expr::Function(Pattern::Variable(p), b) => {
-            let tv = t.fresh();
-            let env1 = Env(env.0.update(p, Scheme(HashSet::new(), Type::Variable(tv.clone()))));
-            let (s1, t1) = infer(&env1, t, *b)?;
-            Ok((s1.clone(), Type::Arrow(Box::new(Type::Variable(tv).apply(&s1)), Box::new(t1.apply(&s1)))))
-            /*
+        Expr::Function(p, b) => {
             let tvs = p.bound_vars();
-            let typed_pattern : HashMap<_, _> = tvs.iter().map(|tv| (tv.clone(), Scheme(HashSet::new(), Type::Variable(t.fresh())))).collect();
-            let env1 = Env(typed_pattern.clone().union(env.0.clone()));
-            let (s1, t1) = infer(&env1, t, *b)?;
-            let t2 = p.into_type(&typed_pattern.iter().map(|(k, v)| (k.clone(), v.apply(&s1).instantiate(t))).collect());
-            Ok((s1.clone(), Type::Arrow(Box::new(t2.apply(&s1)), Box::new(t1.apply(&s1)))))
-            */
+            let typed_pattern : HashMap<_, _> = tvs.iter().map(|tv| (tv.clone(), Scheme(HashSet::new(), Type::Variable(i.fresh())))).collect();
+            let i1 = typed_pattern
+                .iter()
+                .fold(i.clone(), |acc, (var, scheme)| acc.set_env(var.clone(), scheme.clone()));
+
+            let t1 = infer(&i1, *b)?;
+            let t2 = p.into_type(&typed_pattern.iter().map(|(k, v)| (k.clone(), v.instantiate(&i1))).collect());
+            Ok(Type::Arrow(Box::new(t2), Box::new(t1)))
             /*
              * function free_vars for all patterns
              * add all free vars to env
@@ -148,42 +179,55 @@ pub fn infer(env: &Env, t: &mut TypeVarSet, e: Expr) -> Result<(Subst, Type), Ty
              * return an arrow from t2 to t1
             */
         },
+        Expr::Let(p, v, e) => {
+            let t1 = infer(i, *v)?;
+            let i2 = p.into_env(i, &t1)?
+                .into_iter()
+                .fold(i.clone(), |acc, (k, v)| acc.set_env(k, v));
+            let t2 = infer(&i2, *e)?;
+            Ok(t2)
+                /* infer the type of the variable's value
+                 * apply the resulting sub to env
+                 * function that takes in a pattern and a type and returns an env
+                 * concat our two envs
+                 * infer the type of the body with the new env
+                 * combine the subs and return the body type
+                */
+        },
         Expr::Record(r) => {
-            let (s, rt) = r.iter()
-                .map(|(k, v)| (k, infer(env, t, v.clone()))) // an iter over (String, Result<(Subst, Type), TypeError>)
-                .fold(Ok((HashMap::new(), HashMap::new())), |mut acc : Result<_, TypeError>, (k, v)| {
+            let rt = r.iter()
+                .map(|(k, v)| (k, infer(i, v.clone()))) // an iter over (String, Result<(Subst, Type), TypeError>)
+                .fold(Ok(HashMap::new()), |mut acc : Result<_, TypeError>, (k, v)| {
                     acc
                         .as_mut()
                         .map_err(|e| e.clone())
                         .and_then(|acc| {
-                            v.map(|(st, t)| {
-                                acc.0.extend(st);
-                                acc.1.insert(k.clone(), t);
+                            v.map(|t| {
+                                acc.insert(k.clone(), t);
                             })
                         })?;
                     acc
                 })?;
-            Ok((s, Type::Record(rt)))
+            Ok(Type::Record(rt))
         },
         Expr::If(p, e1, e2) => {
-            let (sp, tp) = infer(env, t, *p)?; // infer the predicate
-            let (s1, t1) = infer(env, t, *e1)?; // infer the consequent
-            let (s2, t2) = infer(env, t, *e2)?; // infer the alternative
-            let s3 = unify(tp.apply(&sp), Type::Boolean)?; // the predicate is of type boolean
-            let s_total = combine(&combine(&sp, &s1), &combine(&s2, &s3));
-            if let Ok(s4) = unify(t1.apply(&s_total), t2.apply(&s_total)) {
-                Ok((combine(&s_total, &s4), t1))
+            let predicate = infer(i, *p)?; 
+            let consequent = infer(i, *e1)?;
+            let alternative = infer(i, *e2)?;
+            unify(i, predicate, Type::Boolean)?;
+            if let Ok(()) = unify(i, consequent.clone(), alternative.clone()) {
+                Ok(consequent)
             } else {
-                Ok((s_total, Type::Or(Box::new(t1), Box::new(t2))))
+                Ok(Type::Or(Box::new(consequent), Box::new(alternative)))
             }
         },
-        _ => todo!()
     }
 }
 
 pub fn infer_type(e: Expr) -> Result<Type, TypeError> {
-    let (s, t) = infer(&Env(HashMap::new()), &mut TypeVarSet::new(), e)?;
-    Ok(t.apply(&s))
+    let i = Infer::default();
+    let t = infer(&i, e)?;
+    Ok(t.apply(&i))
 }
 
 #[cfg(test)]
@@ -193,30 +237,22 @@ mod test {
     use crate::parser::*;
     #[test]
     fn infer_num() {
+        let i = Infer::default();
         assert_eq!(
-            infer(
-                &Env(HashMap::new()), 
-                &mut TypeVarSet::new(), 
-                Expr::Number(3.14)), Ok((HashMap::new(), Type::Number)));
+            infer(&i, Expr::Number(3.14)).map(|t| t.apply(&i)), Ok(Type::Number));
     }
     #[test]
     fn infer_var() {
         use std::matches;
+        let i = Infer::default();
         assert!(
             matches!(
-                infer(
-                    &Env(HashMap::new()), 
-                    &mut TypeVarSet::new(), 
-                    Expr::Variable(String::from("a"))), 
+                infer(&i, Expr::Variable(String::from("a"))).map(|t| t.apply(&i)),
                 Err(TypeError::UnknownVar(_))));
-        let t = infer(
-            &Env(HashMap::unit(String::from("a"), Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))))), 
-            &mut TypeVarSet::new(), 
-            Expr::Variable(String::from("a")));
-        match t {
-            Ok((h, Type::Variable(_))) if h == HashMap::new() => (),
-            _ => panic!("{:?} is not a type variable with empty sub", t)
-        }
+        let i = Infer::default();
+        let i = i.set_env(String::from("a"), Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))));
+        let t = infer(&i, Expr::Variable(String::from("a"))).map(|t| t.apply(&i));
+        assert!(matches!(t, Ok(Type::Variable(_))));
     }
     #[test]
     fn infer_fn() {
@@ -267,28 +303,6 @@ mod test {
             _ => panic!()
         }
     }
-    #[test]
-    fn combine_subst() {
-        assert_eq!(
-            combine(&HashMap::new(), &HashMap::new()),
-            HashMap::new());
-        assert_eq!(
-            combine(&HashMap::new(), &HashMap::unit(String::from("a"), Type::Number)),
-            HashMap::unit(String::from("a"), Type::Number));
-        assert_eq!(
-            combine(&HashMap::unit(String::from("a"), Type::Number), &HashMap::new()),
-            HashMap::unit(String::from("a"), Type::Number));
-        assert_eq!(
-            combine(
-                &HashMap::unit(String::from("a"), Type::Number), 
-                &HashMap::unit(String::from("a"), Type::Variable(String::from("0")))),
-            HashMap::unit(String::from("a"), Type::Number));
-        assert_eq!(
-            combine(
-                &HashMap::unit(String::from("a"), Type::Variable(String::from("0"))),
-                &HashMap::unit(String::from("a"), Type::Number)), 
-            HashMap::unit(String::from("a"), Type::Variable(String::from("0"))));
-    }
 
     #[test]
     fn unify_types() {
@@ -306,8 +320,9 @@ mod test {
                     Box::new(Type::Variable(String::from("b")))), Type::Variable(String::from("c")))
         ];
         for (l, r) in should_work {
-            if let Ok(s) = unify(l.clone(), r.clone()) {
-                assert_eq!(l.apply(&s), r.apply(&s));
+            let i = Infer::default();
+            if let Ok(s) = unify(&i, l.clone(), r.clone()) {
+                assert_eq!(l.apply(&i), r.apply(&i));
             }
         }
     }
@@ -315,21 +330,29 @@ mod test {
     #[test]
     fn unify_illegal_types() {
         use std::matches;
-        
+
+        let i = Infer::default(); 
         assert!(matches!(
                 unify(
+                    &i,
                     Type::Number,
                     Type::Arrow(
                         Box::new(Type::Number),
                         Box::new(Type::Number))), Err(TypeError::UnificationFail(_, _))));
+
+        let i = Infer::default(); 
         assert!(matches!(
                 unify(
+                    &i,
                     Type::Variable(String::from("a")),
                     Type::Arrow(
                         Box::new(Type::Variable(String::from("a"))),
                         Box::new(Type::Number))), Err(TypeError::InfiniteType(_, _))));
+
+        let i = Infer::default(); 
         assert!(matches!(
                 unify(
+                    &i,
                     Type::Record(im::hashmap!{
                         String::from("value") => Type::Variable(String::from("a"))
                     }),
@@ -384,7 +407,7 @@ mod test {
         }));
     }
     #[test]
-    fn infer_match() {
+    fn trivial_infer_match() {
         let t = infer_type(parse_expr(&scan("fn x -> match x with x -> x end")).unwrap().0).unwrap();
         match t {
             Type::Arrow(l, r) if l == r && matches!(*l, Type::Variable(_)) => (),
@@ -393,7 +416,9 @@ mod test {
 
         let t = infer_type(parse_expr(&scan("fn x -> match x with n -> if n then 3 else 4 end")).unwrap().0).unwrap();
         assert_eq!(t, Type::Arrow(Box::new(Type::Boolean), Box::new(Type::Number)));
-
+    }
+    #[test]
+    fn infer_match() {
         let t = infer_type(parse_expr(&scan("fn x -> match x with n -> if n then 3 else 4, m -> m")).unwrap().0).unwrap();
         match t {
             Type::Arrow(l, r) if matches!(*l, Type::Variable(_)) && l == r => (),

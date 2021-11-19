@@ -180,10 +180,11 @@ pub fn parse_parens<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), Pars
     expect!(Token::Rpar, tokens);
     Ok((e, tokens))
 }
-
+/*
 pub fn parse_pattern_record<'a>(tokens: &'a [Token]) -> Result<(Pattern, &'a [Token]), ParseError> {
     expect!(Token::LBrace, tokens);
     let mut rest = tokens;
+    println!("parsing pattern record with rest {:?}", tokens);
     let mut contents = HashMap::new();
     loop {
         if let Ok((field, tokens)) = parse_identifier(rest) {
@@ -199,6 +200,42 @@ pub fn parse_pattern_record<'a>(tokens: &'a [Token]) -> Result<(Pattern, &'a [To
     }
     expect!(Token::RBrace, rest);
     Ok((Pattern::Record(contents), rest))
+}
+*/
+
+pub fn parse_pattern_record<'a>(tokens: &'a [Token]) -> Result<(Pattern, &'a [Token]), ParseError> {
+    expect!(Token::LBrace, tokens);
+    let mut contents = HashMap::new();
+    let mut rest = tokens;
+    loop {
+        if rest.len() == 0 {
+            return Err(ParseError::UnexpectedEof);
+        }
+        if rest[0] == Token::RBrace {
+            return Ok((Pattern::Record(contents), &rest[1..]));
+        } else {
+            let (i, tokens) = parse_identifier(rest)?;
+            rest = tokens;
+            if rest.len() == 0 {
+                return Err(ParseError::UnexpectedEof);
+            }
+            if rest[0] == Token::Colon {
+                let (p, tokens) = parse_pattern(&rest[1..])?;
+                contents.insert(i, p);
+                rest = tokens;
+            } else {
+                contents.insert(i.clone(), Pattern::Variable(i));
+            }
+            if rest.len() == 0 {
+                return Err(ParseError::UnexpectedEof);
+            }
+            if rest[0] == Token::RBrace {
+                return Ok((Pattern::Record(contents), &rest[1..]));
+            } else if rest[0] == Token::Comma {
+                rest = &rest[1..];
+            }
+        }
+    }
 }
 
 pub fn parse_pattern<'a>(tokens: &'a [Token]) -> Result<(Pattern, &'a [Token]), ParseError> {
@@ -337,6 +374,16 @@ mod test {
         let (p, _) = parse_pattern(&scan("{a:a}")).unwrap();
         assert_eq!(p, Pattern::Record(im::hashmap!{
             String::from("a") => Pattern::Variable(String::from("a"))
+        }));
+        let (p, _) = parse_pattern(&scan("{a}")).unwrap();
+        assert_eq!(p, Pattern::Record(im::hashmap!{
+            String::from("a") => Pattern::Variable(String::from("a"))
+        }));
+        println!("\nPARSING HARD PATTERN\n");
+        let (p, _) = parse_pattern(&scan("{a,b}")).unwrap();
+        assert_eq!(p, Pattern::Record(im::hashmap!{
+            String::from("a") => Pattern::Variable(String::from("a")),
+            String::from("b") => Pattern::Variable(String::from("b"))
         }));
     }
 }

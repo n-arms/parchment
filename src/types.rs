@@ -4,6 +4,9 @@ use im::hashset::HashSet;
 use im::hashmap::HashMap;
 use std::fmt;
 use super::expr;
+use super::infer::Infer;
+use std::rc::Rc;
+use std::cell::{RefCell, Cell};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TypeVarSet {
@@ -34,28 +37,14 @@ pub enum Type {
 }
 
 impl Type {
-    pub fn generalize(&self, e: &Env) -> Scheme {
+    /* create a scheme from a type
+     * the polymorphic type vars are all the free vars in the type that are not free in Infer
+     */
+    pub fn generalize(&self, i: &Infer) -> Scheme {
         Scheme(
             self.free_type_vars()
-                //.relative_complement(e.0.keys().collect::<HashSet<_>>()),
-                .relative_complement(e.free_type_vars()),
+                .relative_complement(i.free_in_env()),
             self.clone())
-    }
-    // in this case env is a map from variable names to types
-    #[allow(unused_variables)]
-    pub fn type_check(&self, env: &Env, tv: &mut TypeVarSet, e: expr::Expr) -> bool {
-        match e {
-            expr::Expr::Function(..) => todo!(),
-            expr::Expr::Application(..) => todo!(),
-            expr::Expr::Number(_) => self == &Type::Number,
-            expr::Expr::Boolean(_) => self == &Type::Boolean,
-            expr::Expr::Variable(v) => 
-                env.0.get(&v).map(|t| &t.instantiate(tv) == self).unwrap_or(false),
-            expr::Expr::Let(..) => todo!(),
-            expr::Expr::Record(_) => todo!(),
-            expr::Expr::If(..) => todo!(),
-            expr::Expr::Match(..) => todo!(),
-        }
     }
 }
 
@@ -76,25 +65,28 @@ impl fmt::Display for Type {
 pub struct Scheme(pub HashSet<String>, pub Type);
 
 impl Scheme {
-    pub fn instantiate(&self, t: &mut TypeVarSet) -> Type {
+    pub fn instantiate(&self, i: &Infer) -> Type {
         let new_tvs : Vec<_> = vec![(); self.0.len()]
             .into_iter()
-            .map(|()| Type::Variable(t.fresh()))
+            .map(|()| Type::Variable(i.fresh()))
             .collect();
-        self.1.apply(
-            &HashMap::from(
-                self.0
-                    .clone()
-                    .into_iter()
-                    .zip(new_tvs)
-                    .collect::<Vec<_>>()))
+        self.1.apply(&Infer::new(
+            Rc::new(
+                      RefCell::new(
+                          HashMap::from(self.0
+                                        .clone()
+                                        .into_iter()
+                                        .zip(new_tvs)
+                                        .collect::<Vec<_>>()))),
+            Rc::new(Cell::new(0)),
+            HashMap::new()
+        ))
     }
 }
 
-pub type Subst = HashMap<String, Type>;
-
 pub trait Substable {
-    fn apply(&self, s: &Subst) -> Self;
+    // fn apply(&self, s: &impl Subst) -> Self;
+    fn apply(&self, i: &Infer) -> Self;
     fn free_type_vars(&self) -> HashSet<String>;
     fn contains_var(&self, tv: String) -> bool {
         self.free_type_vars().contains(&tv)
@@ -102,17 +94,15 @@ pub trait Substable {
 }
 
 impl Substable for Type {
-    fn apply(&self, s: &Subst) -> Self {
+    fn apply(&self, i: &Infer) -> Self {
         match self {
-            Type::Arrow(l, r) => Type::Arrow(Box::new(l.apply(s)), Box::new(r.apply(s))),
+            Type::Arrow(l, r) => Type::Arrow(Box::new(l.apply(i)), Box::new(r.apply(i))),
             Type::Variable(v) =>
-                s.get(v)
-                    .map(|x| x.apply(s)) // dont forget to recurse here, it is a major bug source
-                    .unwrap_or(Type::Variable(v.clone())),
+                i.apply(v), // don't forget to recurse
             Type::Number => Type::Number,
             Type::Boolean => Type::Boolean,
-            Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), v.apply(s))).collect()),
-            Type::Or(l, r) => Type::Or(Box::new(l.apply(s)), Box::new(r.apply(s))),
+            Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), v.apply(i))).collect()),
+            Type::Or(l, r) => Type::Or(Box::new(l.apply(i)), Box::new(r.apply(i))),
         }
     }
     fn free_type_vars(&self) -> HashSet<String> {
@@ -133,14 +123,10 @@ impl Substable for Type {
 }
 
 impl Substable for Scheme {
-    fn apply(&self, s: &Subst) -> Self {
+    fn apply(&self, i: &Infer) -> Self {
         Scheme(
-            self.0.clone(), 
-            self.1.apply(
-                &self.0
-                    .iter()
-                    .fold(s.clone(), |acc, x| acc.without(x))))
-
+            self.0.clone(),
+            self.1.apply(&i.without_sub(self.0.clone())))
     }
     
     fn free_type_vars(&self) -> HashSet<String> {
@@ -151,44 +137,6 @@ impl Substable for Scheme {
 impl fmt::Display for Scheme {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "Scheme({:?} {})", self.0, self.1)
-    }
-}
-
-// let s' be the substitution of self to every element in other, 
-// then take the left biased union s' U self
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Env(pub HashMap<String, Scheme>);
-impl Env {
-    pub fn new() -> Self {
-        Env(HashMap::new())
-    }
-
-    pub fn unit(tv: String, t: Scheme) -> Self {
-        Env(HashMap::unit(tv, t))
-    }
-}
-
-impl Substable for Env {
-    fn free_type_vars(&self) -> HashSet<String> {
-        self.0.values()
-            .fold(HashSet::new(), |acc, x| x.free_type_vars().union(acc))
-    }
-
-    fn apply(&self, s: &Subst) -> Self {
-        Env(self.0.iter()
-            .map(|(k, v)| (k.clone(), v.apply(s)))
-            .collect())
-    }
-}
-
-impl fmt::Display for Env {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{{ {}}}", self.0.iter()
-               .fold(String::new(), |mut acc, (k, v)| {
-                   acc.push_str(&format!("{} => {} ", k, v));
-                   acc
-               }))
     }
 }
 
@@ -224,7 +172,8 @@ mod test {
     }
     #[test]
     fn sub_mono() {
-        let s = HashMap::unit(String::from("a"), Type::Variable(String::from("0")));
+        let s = Infer::default();
+        s.add_sub(String::from("a"), Type::Variable(String::from("0")));
         assert_eq!(Type::Number.apply(&s), Type::Number);
         assert_eq!(
             Type::Variable(String::from("a")).apply(&s),
@@ -255,7 +204,8 @@ mod test {
     }
     #[test]
     fn sub_poly() {
-        let s = HashMap::unit(String::from("a"), Type::Variable(String::from("0")));
+        let s = Infer::default();
+        s.add_sub(String::from("a"), Type::Variable(String::from("0")));
         let t = Type::Arrow(
             Box::new(Type::Variable(String::from("a"))),
             Box::new(Type::Variable(String::from("b"))));
@@ -278,54 +228,31 @@ mod test {
             Scheme(HashSet::unit(String::from("a")), t));
     }
     #[test]
-    fn sub_env() {
-        let s = HashMap::unit(String::from("a"), Type::Number);
-        let t1 = Type::Variable(String::from("a"));
-        let t2 = Type::Variable(String::from("b"));
-        let t3 = Type::Arrow(
-            Box::new(Type::Variable(String::from("a"))),
-            Box::new(Type::Variable(String::from("b"))));
-        assert_eq!(Env::new().apply(&s), Env::new());
-        assert_eq!(
-            Env::unit(String::from("x"), Scheme(HashSet::new(), Type::Number)).apply(&s),
-            Env::unit(String::from("x"), Scheme(HashSet::new(), Type::Number)));
-        assert_eq!(
-            Env::unit(String::from("x"), Scheme(HashSet::new(), t1.clone())).apply(&s),
-            Env::unit(String::from("x"), Scheme(HashSet::new(), Type::Number)));
-        assert_eq!(
-            Env::unit(String::from("x"), Scheme(HashSet::new(), t2.clone())).apply(&s),
-            Env::unit(String::from("x"), Scheme(HashSet::new(), t2.clone())));
-        assert_eq!(
-            Env::unit(String::from("x"), Scheme(HashSet::new(), t3)).apply(&s),
-            Env::unit(String::from("x"), Scheme(HashSet::new(), Type::Arrow(
-                        Box::new(Type::Number),
-                        Box::new(Type::Variable(String::from("b")))))));
-    }
-    #[test]
     fn gen_type() {
-        let e = Env::unit(String::from("a"), Scheme(HashSet::new(), Type::Number));
+        let i = Infer::default().set_env(String::from("a"), Scheme(HashSet::new(), Type::Number));
         assert_eq!(
-            Type::Number.generalize(&e),
+            Type::Number.generalize(&i),
             Scheme(HashSet::new(), Type::Number));
         assert_eq!(
-            Type::Variable(String::from("a")).generalize(&e),
+            Type::Variable(String::from("a")).generalize(&i),
             Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))));
         assert_eq!(
-            Type::Variable(String::from("b")).generalize(&e),
+            Type::Variable(String::from("b")).generalize(&i),
             Scheme(HashSet::unit(String::from("b")), Type::Variable(String::from("b"))));
     }
     #[test]
     fn inst_scheme() {
-        let mut t = TypeVarSet::new();
+        let i = Infer::default();
         assert_eq!(
-            Scheme(HashSet::new(), Type::Variable(String::from("a"))).instantiate(&mut t),
+            Scheme(HashSet::new(), Type::Variable(String::from("a"))).instantiate(&i),
             Type::Variable(String::from("a")));
+        let i = Infer::default();
         assert_eq!(
-            Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))).instantiate(&mut t),
+            Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))).instantiate(&i),
+            Type::Variable(String::from("0")));
+        assert_eq!(
+            Scheme(HashSet::unit(String::from("b")), Type::Variable(String::from("b"))).instantiate(&i),
             Type::Variable(String::from("1")));
-        assert_eq!(
-            Scheme(HashSet::unit(String::from("b")), Type::Variable(String::from("b"))).instantiate(&mut t),
-            Type::Variable(String::from("2")));
     }
     #[test]
     fn unique_type_var_set_prop() {

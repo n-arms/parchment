@@ -3,8 +3,8 @@ use std::fmt;
 use rand::prelude::*;
 use im::hashmap::HashMap;
 use im::hashset::HashSet;
-use super::types::{Type, Scheme, Env};
-use super::infer::TypeError;
+use super::types::{Type, Scheme};
+use super::infer::{TypeError, Infer, InferResult};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -33,30 +33,32 @@ impl Pattern {
                         .collect())
         }
     }
-    pub fn into_env(&self, env: &Env, target: &Type) -> Result<Env, TypeError> {
+    pub fn into_env(&self, i: &Infer, target: &Type) -> InferResult<HashMap<String, Scheme>> {
         match self {
-            Pattern::Variable(s) => Ok(Env(HashMap::unit(s.clone(), target.generalize(env)))),
+            Pattern::Variable(s) => {
+                Ok(HashMap::unit(s.clone(), target.generalize(i)))
+            }
             Pattern::Record(r1) => match target {
                 Type::Record(r2) => {
                     r1.iter()
                         .map(|(f, p)| {
                             let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
-                            p.into_env(env, nt)
+                            p.into_env(i, nt)
                         }) // list of Result<Env, TypeError>
                         .fold(Ok(HashMap::new()), |mut acc : Result<_, TypeError>, x| {
                             let x = x?;
                             acc.as_mut()
-                                .map(|e| e.extend(x.0))
+                                .map(|e| e.extend(x))
                                 .map_err(|e| e.clone())?;
                             acc
                         })
-                        .map(|e| Env(e))
                 },
                 _ => Err(TypeError::IsntRecord(target.clone()))
             }
         }
     }
-    pub fn into_env_match(&self, env: &Env, target: &Type) -> Result<Env, TypeError> {
+    /*
+    pub fn into_env_match(&self, i: &Infer, target: &Type) -> Result<Env, TypeError> {
         match self {
             Pattern::Variable(s) => Ok(Env(HashMap::unit(s.clone(), Scheme(HashSet::new(), target.clone())))),
             Pattern::Record(r1) => match target {
@@ -79,6 +81,7 @@ impl Pattern {
             }
         }
     }
+    */
 }
 
 #[derive(Clone, Debug)]
