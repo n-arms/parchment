@@ -1,4 +1,4 @@
-use super::types::{Scheme, Type, TypeVar, TypeVarSet};
+use super::types::{Scheme, Type, TypeVar, TypeVarSet, TypeEnv};
 use im::hashmap::HashMap;
 use im::hashset::HashSet;
 use rand::prelude::*;
@@ -31,8 +31,16 @@ impl<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> Pattern
                 .map(Pattern::Record),
         }
     }
-    /*
-    pub fn into_type(&self, env: &HashMap<V, Type>) -> Type {
+}
+
+impl Pattern<String> {
+    pub fn bindings(&self) -> HashSet<String> {
+        match self {
+            Self::Variable(v) => HashSet::unit(v.clone()),
+            Self::Record(r) => r.values().flat_map(Pattern::bindings).collect()
+        }
+    }
+    pub fn into_type(&self, env: &HashMap<String, Type>) -> Type {
         match self {
             Pattern::Variable(s) => env.get(s).unwrap().clone(),
             Pattern::Record(r) => super::types::Type::Record(
@@ -42,6 +50,8 @@ impl<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> Pattern
             ),
         }
     }
+}
+    /*
     pub fn into_env(&self, i: &Infer, target: &Type) -> InferResult<HashMap<String, Scheme>> {
         match self {
             Pattern::Variable(s) => Ok(HashMap::unit(s.clone(), target.generalize(i))),
@@ -87,7 +97,6 @@ impl<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> Pattern
         }
     }
     */
-}
 
 #[derive(Clone, Debug)]
 pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {

@@ -69,8 +69,25 @@ pub fn generate(
 
             Ok((c, t2))
         }
-        Expr::Function(..) => todo!(),
-        Expr::Record(_) => todo!(),
+        Expr::Record(r) => {
+            let mut h = HashMap::new();
+            let mut cs = Vec::new();
+            for (var, val) in r.iter() {
+                let (c, typ) = generate(val, t, env.clone())?;
+                cs.extend(c);
+                h.insert(var.clone(), typ);
+            }
+            Ok((cs, Type::Record(h)))
+        },
+        Expr::Function(p, b) => {
+            let bound = p.bindings();
+            let typed_pattern: TypeEnv = bound.into_iter().map(|tv| (tv, Scheme(HashSet::new(), Type::Variable(t.fresh())))).collect();
+            let env1 = typed_pattern.clone().union(env.clone());
+            let (c1, t1) = generate(b, t, env1)?;
+            let t2 = p.into_type(&typed_pattern.into_iter().map(|(k, v)| (k, v.instantiate(t))).collect());
+
+            Ok((c1, Type::Arrow(Box::new(t2), Box::new(t1))))
+        },
         Expr::Match(_, _) => todo!(),
         Expr::Block(_) => todo!(),
     }

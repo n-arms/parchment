@@ -25,7 +25,6 @@ fn type_repl(line: &str) {
         println!("const: {}", constr);
     }
     println!("gen type: {}", t);
-
     let s = solve(c).unwrap();
     println!("final: {}", apply(&t, &s));
 }

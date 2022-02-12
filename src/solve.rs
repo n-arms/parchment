@@ -137,4 +137,9 @@ mod test {
 
         assert_eq!(apply(&v1, &s), apply(&v2, &s));
     }
+
+    #[test]
+    fn record() {
+        infer("{x:1, y:2,}");
+    }
 }

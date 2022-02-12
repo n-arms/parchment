@@ -122,7 +122,7 @@ pub fn apply(t: &Type, s: &Substitution) -> Type {
         Type::Variable(v) => s.get(v).cloned().unwrap_or_else(|| t.clone()),
         Type::Arrow(l, r) => Type::Arrow(Box::new(apply(l, s)), Box::new(apply(r, s))),
         Type::Constructor(_) => t.clone(),
-        Type::Record(_) => todo!(),
+        Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), apply(v, s))).collect()),
     }
 }
 
