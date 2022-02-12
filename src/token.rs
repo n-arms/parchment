@@ -1,7 +1,11 @@
 macro_rules! matches {
     ($t:pat, $e:expr) => {
-        if let $t = $e {true} else {false}
-    }
+        if let $t = $e {
+            true
+        } else {
+            false
+        }
+    };
 }
 
 use std::cmp;
@@ -27,8 +31,7 @@ pub enum Token {
     True,
     False,
     Match,
-    With,
-    End
+    Semicolon,
 }
 
 impl cmp::PartialEq for Token {
@@ -38,12 +41,20 @@ impl cmp::PartialEq for Token {
             Token::Rpar => matches!(Token::Rpar, other),
             Token::Fn => matches!(Token::Fn, other),
             Token::Rarrow => matches!(Token::Rarrow, other),
-            Token::Identifier(i) => if let Token::Identifier(j) = other {
-                i == j
-            } else {false},
-            Token::Number(i)  => if let Token::Number(j) = other {
-                (i - j).abs() < 0.0001
-            } else {false},
+            Token::Identifier(i) => {
+                if let Token::Identifier(j) = other {
+                    i == j
+                } else {
+                    false
+                }
+            }
+            Token::Number(i) => {
+                if let Token::Number(j) = other {
+                    (i - j).abs() < 0.0001
+                } else {
+                    false
+                }
+            }
             Token::Let => matches!(Token::Let, other),
             Token::Eqs => matches!(Token::Eqs, other),
             Token::In => matches!(Token::In, other),
@@ -57,8 +68,7 @@ impl cmp::PartialEq for Token {
             Token::True => matches!(Token::True, other),
             Token::False => matches!(Token::False, other),
             Token::Match => matches!(Token::Match, other),
-            Token::With => matches!(Token::With, other),
-            Token::End => matches!(Token::End, other),
+            Token::Semicolon => matches!(Token::Semicolon, other),
         }
     }
 }

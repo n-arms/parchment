@@ -1,28 +1,33 @@
-mod parser;
 mod expr;
-mod token;
+mod gen;
 mod lexer;
+mod parser;
+mod solve;
+mod sub;
+mod token;
 mod types;
-mod infer;
 
+use gen::generate;
+use solve::solve;
 use std::io::{self, BufRead, Write};
+use types::{apply, TypeEnv, TypeVarSet};
 
 fn type_repl(line: &str) {
     let tokens = lexer::scan(line);
-    let e = parser::parse_expr(&tokens);
-    if let Ok(ast) = e {
-        if ast.1 != [] {
-            return println!("leftover text after parse: {:?}", ast);
-        }
-        let tr = infer::infer_type(ast.0.clone());
-        if let Ok(t) = tr {
-            println!("{} :: {}", ast.0, t);
-        } else {
-            println!("{} :: {:?}", ast.0, tr);
-        }
-    } else {
-        println!("{:?}", e);
+    let e = parser::parse_expr(&tokens)
+        .clone()
+        .unwrap()
+        .unwrap()
+        .0;
+    println!("expr: {}", e);
+    let (c, t) = generate(&e, &TypeVarSet::new(), TypeEnv::new()).unwrap();
+    for constr in c.iter() {
+        println!("const: {}", constr);
     }
+    println!("gen type: {}", t);
+
+    let s = solve(c).unwrap();
+    println!("final: {}", apply(&t, &s));
 }
 
 fn main() {
@@ -31,7 +36,9 @@ fn main() {
     io::stdout().flush().unwrap();
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
-        if line.as_ref().map(|line| line == "quit").unwrap() {break;}
+        if line.as_ref().map(|line| line == "quit").unwrap() {
+            break;
+        }
 
         type_repl(&line.expect("stdin read failed"));
         print!("> ");
