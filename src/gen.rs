@@ -152,21 +152,23 @@ pub fn gen_block(
 ) -> Result<(HashSet<Assumption>, Vec<Constraint>, Type)> {
     if let Some(fst) = b.get(0) {
         match fst {
-            Statement::Let(Pattern::Variable(v), body) => {
+            Statement::Let(p, body) => {
+                let (bindings, tp) = p.type_pattern(t);
                 let (a1, c1, t1) = generate(body, t, m.clone())?;
                 let (mut a2, c2, t2) = gen_block(&b[1..], t, m.clone())?;
 
                 let mut c3: Vec<_> = a2
                     .iter()
-                    .filter(|(var, _)| var == v)
-                    .map(|(_, tv)| {
-                        Constraint::InstanceOf(Type::Variable(tv.clone()), m.clone(), t1.clone())
+                    .filter_map(|(var, tv1)| {
+                        let tv2 = bindings.get(var)?;
+                        Some(Constraint::InstanceOf(Type::Variable(tv1.clone()), m.clone(), Type::Variable(tv2.clone())))
                     })
                     .collect();
                 c3.extend(c1);
                 c3.extend(c2);
+                c3.push(Constraint::Equality(tp, t1));
 
-                a2.retain(|(var, _)| var != v);
+                a2.retain(|(var, _)| !bindings.contains_key(var));
                 a2.extend(a1);
 
                 Ok((a2, c3, t2))
@@ -183,7 +185,6 @@ pub fn gen_block(
                     Ok((a2, c2, t2))
                 }
             }
-            Statement::Let(Pattern::Record(_), _) => todo!(),
         }
     } else {
         Ok((

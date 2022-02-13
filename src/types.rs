@@ -91,8 +91,8 @@ impl Free for Type {
         match self {
             Type::Variable(v) => HashSet::unit(v.clone()),
             Type::Constructor(_) => HashSet::new(),
-            Type::Arrow(l, r) => l.free_type_vars().union(r.free_type_vars()),
-            Type::Record(_) => todo!(),
+            Type::Arrow(e1, e2) => e1.free_type_vars().union(e2.free_type_vars()),
+            Type::Record(r) => r.values().flat_map(Free::free_type_vars).collect(),
         }
     }
 }
@@ -201,101 +201,4 @@ mod test {
             HashSet::unit(String::from("1"))
         );
     }
-    /*
-    #[test]
-    fn sub_mono() {
-        let s = Infer::default();
-        s.add_sub(0, Type::Variable(0));
-        assert_eq!(Type::Number.apply(&s), Type::Number);
-        assert_eq!(
-            Type::Variable(String::from("a")).apply(&s),
-            Type::Variable(String::from("0")));
-        assert_eq!(
-            Type::Variable(String::from("b")).apply(&s),
-            Type::Variable(String::from("b")));
-        assert_eq!( // [a/0] (a -> b) -> a = (0 -> b) -> 0
-            Type::Arrow(
-                Box::new(Type::Arrow(
-                        Box::new(Type::Variable(String::from("a"))),
-                        Box::new(Type::Variable(String::from("b"))))),
-                Box::new(Type::Variable(String::from("a")))).apply(&s),
-            Type::Arrow(
-                Box::new(Type::Arrow(
-                        Box::new(Type::Variable(String::from("0"))),
-                        Box::new(Type::Variable(String::from("b"))))),
-                Box::new(Type::Variable(String::from("0")))));
-        assert_eq!(
-            Type::Record(im::hashmap!{
-                String::from("left") => Type::Variable(String::from("a")),
-                String::from("right") => Type::Variable(String::from("b"))
-            }).apply(&s),
-            Type::Record(im::hashmap!{
-                String::from("left") => Type::Variable(String::from("0")),
-                String::from("right") => Type::Variable(String::from("b"))
-            }));
-    }
-    #[test]
-    fn sub_poly() {
-        let s = Infer::default();
-        s.add_sub(String::from("a"), Type::Variable(String::from("0")));
-        let t = Type::Arrow(
-            Box::new(Type::Variable(String::from("a"))),
-            Box::new(Type::Variable(String::from("b"))));
-        assert_eq!(
-            Scheme(HashSet::new(), t.clone()).apply(&s),
-            Scheme(
-                HashSet::new(),
-                Type::Arrow(
-                    Box::new(Type::Variable(String::from("0"))),
-                    Box::new(Type::Variable(String::from("b"))))));
-        assert_eq!(
-            Scheme(HashSet::unit(String::from("b")), t.clone()).apply(&s),
-            Scheme(
-                HashSet::unit(String::from("b")),
-                Type::Arrow(
-                    Box::new(Type::Variable(String::from("0"))),
-                    Box::new(Type::Variable(String::from("b"))))));
-        assert_eq!(
-            Scheme(HashSet::unit(String::from("a")), t.clone()).apply(&s),
-            Scheme(HashSet::unit(String::from("a")), t));
-    }
-    #[test]
-    fn gen_type() {
-        let i = Infer::default().set_env(String::from("a"), Scheme(HashSet::new(), Type::Number));
-        assert_eq!(
-            Type::Number.generalize(&i),
-            Scheme(HashSet::new(), Type::Number));
-        assert_eq!(
-            Type::Variable(String::from("a")).generalize(&i),
-            Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))));
-        assert_eq!(
-            Type::Variable(String::from("b")).generalize(&i),
-            Scheme(HashSet::unit(String::from("b")), Type::Variable(String::from("b"))));
-    }
-    #[test]
-    fn inst_scheme() {
-        let i = Infer::default();
-        assert_eq!(
-            Scheme(HashSet::new(), Type::Variable(String::from("a"))).instantiate(&i),
-            Type::Variable(String::from("a")));
-        let i = Infer::default();
-        assert_eq!(
-            Scheme(HashSet::unit(String::from("a")), Type::Variable(String::from("a"))).instantiate(&i),
-            Type::Variable(String::from("0")));
-        assert_eq!(
-            Scheme(HashSet::unit(String::from("b")), Type::Variable(String::from("b"))).instantiate(&i),
-            Type::Variable(String::from("1")));
-    }
-    #[test]
-    fn unique_type_var_set_prop() {
-        let i = 100;
-
-        let mut t = TypeVarSet::new();
-        let mut res = HashSet::new();
-        for _ in 0..i {
-            res.insert(t.fresh());
-        }
-        assert_eq!(res.len(), i);
-    }
-    */
 }

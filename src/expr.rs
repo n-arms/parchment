@@ -34,52 +34,6 @@ impl Pattern<String> {
         }
     }
 }
-/*
-pub fn into_env(&self, i: &Infer, target: &Type) -> InferResult<HashMap<String, Scheme>> {
-    match self {
-        Pattern::Variable(s) => Ok(HashMap::unit(s.clone(), target.generalize(i))),
-        Pattern::Record(r1) => match target {
-            Type::Record(r2) => {
-                r1.iter()
-                    .map(|(f, p)| {
-                        let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
-                        p.into_env(i, nt)
-                    }) // list of Result<Env, TypeError>
-                    .fold(Ok(HashMap::new()), |mut acc: Result<_, TypeError>, x| {
-                        let x = x?;
-                        acc.as_mut().map(|e| e.extend(x)).map_err(|e| e.clone())?;
-                        acc
-                    })
-            }
-            _ => Err(TypeError::IsntRecord(target.clone())),
-        },
-    }
-    todo!()
-}
-pub fn into_env_match(&self, i: &Infer, target: &Type) -> Result<Env, TypeError> {
-    match self {
-        Pattern::Variable(s) => Ok(Env(HashMap::unit(s.clone(), Scheme(HashSet::new(), target.clone())))),
-        Pattern::Record(r1) => match target {
-            Type::Record(r2) => {
-                r1.iter()
-                    .map(|(f, p)| {
-                        let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
-                        p.into_env(env, nt)
-                    }) // list of Result<Env, TypeError>
-                    .fold(Ok(HashMap::new()), |mut acc : Result<_, TypeError>, x| {
-                        let x = x?;
-                        acc.as_mut()
-                            .map(|e| e.extend(x.0))
-                            .map_err(|e| e.clone())?;
-                        acc
-                    })
-                    .map(|e| Env(e))
-            },
-            _ => Err(TypeError::IsntRecord(target.clone()))
-        }
-    }
-}
-*/
 
 #[derive(Clone, Debug)]
 pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
@@ -93,76 +47,6 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     Match(Box<Expr<V>>, Vec<(Pattern<V>, Expr<V>)>),
     Block(Vec<Statement<V>>),
 }
-
-/*
-impl Expr<String> {
-    pub fn desugar(&self) -> Result<Expr<usize>, String> {
-        self.resolve_name_conflicts(&VarSet::new(), HashMap::new())
-    }
-    pub fn resolve_name_conflicts(
-        &self,
-        t: &VarSet,
-        env: HashMap<String, usize>,
-    ) -> Result<Expr<usize>, String> {
-        match self {
-            Self::Variable(v) => env
-                .get(v)
-                .ok_or_else(|| v.clone())
-                .map(|e| Expr::Variable(*e)),
-            Self::Function(p, b) => {
-                let bound: HashMap<_, _> =
-                    p.bound_vars().into_iter().map(|v| (v, t.fresh())).collect();
-                let p1 = p
-                    .sub(bound.clone().union(env.clone()))
-                    .expect("pattern var that was not produced as a bound variable");
-                let b1 = b.resolve_name_conflicts(t, bound.clone().union(env))?;
-
-                Ok(Expr::Function(p1, Box::new(b1)))
-            }
-            Self::Application(e1, e2) => {
-                let e1_new = e1.resolve_name_conflicts(t, env.clone())?;
-                let e2_new = e2.resolve_name_conflicts(t, env)?;
-                Ok(Expr::Application(Box::new(e1_new), Box::new(e2_new)))
-            }
-            Self::Block(b) => {
-                let b1 = b
-                    .iter()
-                    .fold(Ok((env, Vec::new())), |state: Result<_, String>, s| {
-                        state.and_then(|(binds, mut block)| match s {
-                            Statement::Raw(r) => {
-                                block.push(Statement::Raw(
-                                    r.resolve_name_conflicts(t, binds.clone())?,
-                                ));
-                                Ok((binds, block))
-                            }
-                            Statement::Let(p, e) => {
-                                let mut bounds: HashMap<_, _> =
-                                    p.bound_vars().into_iter().map(|v| (v, t.fresh())).collect();
-                                bounds.extend(binds.into_iter());
-                                block.push(Statement::Let(
-                                    p.sub(bounds.clone()).unwrap(),
-                                    e.resolve_name_conflicts(t, bounds.clone())?,
-                                ));
-                                Ok((bounds, block))
-                            }
-                        })
-                    });
-                Ok(Expr::Block(b1?.1))
-            }
-            Self::Number(n) => Ok(Expr::Number(*n)),
-            Self::Boolean(b) => Ok(Expr::Boolean(*b)),
-            Self::If(p, c, a) => {
-                let p_new = p.resolve_name_conflicts(t, env.clone())?;
-                let c_new = c.resolve_name_conflicts(t, env.clone())?;
-                let a_new = a.resolve_name_conflicts(t, env)?;
-                Ok(Expr::If(Box::new(p_new), Box::new(c_new), Box::new(a_new)))
-            }
-            Expr::Record(_) => todo!(),
-            Expr::Match(_, _) => todo!(),
-        }
-    }
-}
-*/
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
