@@ -6,13 +6,15 @@ mod solve;
 mod sub;
 mod token;
 mod types;
+mod lift;
 
 use gen::generate;
 use im::HashSet;
 use solve::solve;
 use std::io::{self, BufRead, Write};
 use std::panic::{catch_unwind, RefUnwindSafe};
-use types::{Apply, Type, TypeVarSet};
+use types::{Apply, Type, TypeVarSet, VarSet};
+use lift::lift;
 
 fn read_input() -> String {
     let mut parens = 0isize;
@@ -35,7 +37,11 @@ fn read_input() -> String {
 
 fn process(s: String) -> Type {
     let ast = parser::parse_expr(&lexer::scan(&s)).unwrap().unwrap().0;
-    let tvs = TypeVarSet::new();
+    
+    let p = lift(&ast, HashSet::new(), (), &VarSet::default());
+    println!("{:#?}", p);
+
+    let tvs = TypeVarSet::default();
     let (a, c, t) = generate(&ast, &tvs, HashSet::new()).unwrap();
     assert!(a.is_empty());
     let s = solve(c.into_iter().collect(), &tvs).unwrap();

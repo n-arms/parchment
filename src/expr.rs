@@ -1,5 +1,5 @@
 use super::types::{Type, TypeVar, TypeVarSet};
-use im::hashmap::HashMap;
+use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
 use std::fmt;
@@ -31,6 +31,13 @@ impl Pattern<String> {
                     );
                 (b, Type::Record(t))
             }
+        }
+    }
+
+    pub fn bound_vars(&self) -> HashSet<String> {
+        match self {
+            Pattern::Variable(v) => HashSet::unit(v.clone()),
+            Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect()
         }
     }
 }

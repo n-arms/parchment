@@ -109,7 +109,7 @@ mod test {
 
     fn infer(s: &str) -> Type {
         let e = parse_expr(&scan(s)).unwrap().unwrap().0;
-        let tvs = TypeVarSet::new();
+        let tvs = TypeVarSet::default();
         let (a, c, t1) = generate(&e, &tvs, HashSet::new()).unwrap();
         assert!(a.is_empty());
         t1.apply(solve(c.into_iter().collect(), &tvs).unwrap())
@@ -133,7 +133,7 @@ mod test {
                     Box::new(Expr::Variable(v2.clone())),
                 )),
             );
-            let tvs = TypeVarSet::new();
+            let tvs = TypeVarSet::default();
             let (a, c, t) = generate(&e, &tvs, HashSet::new()).unwrap();
             assert!(a.is_empty());
             println!("{} where", t);

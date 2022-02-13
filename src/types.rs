@@ -4,28 +4,45 @@ use im::hashmap::HashMap;
 use im::hashset::HashSet;
 use std::cell::Cell;
 use std::fmt;
+use std::marker::PhantomData;
 
 pub type TypeVar = String;
 pub type TypeEnv = HashMap<String, Scheme>;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct TypeVarSet {
+pub struct VarSet<V> {
     index: Cell<usize>,
+    f: fn(usize) -> V
 }
 
-impl TypeVarSet {
-    pub fn new() -> Self {
-        TypeVarSet {
+impl<V> VarSet<V> {
+    pub fn new(f: fn(usize) -> V) -> Self {
+        VarSet {
             index: Cell::new(0),
+            f
         }
     }
 
-    pub fn fresh(&self) -> TypeVar {
+    pub fn fresh(&self) -> V {
         let var = self.index.take();
         self.index.set(var + 1);
-        var.to_string()
+        (self.f)(var)
     }
 }
+
+impl Default for VarSet<String> {
+    fn default() -> Self {
+        VarSet::new(|v| v.to_string())
+    }
+}
+
+impl Default for VarSet<usize> {
+    fn default() -> Self {
+        VarSet::new(|v| v)
+    }
+}
+
+pub type TypeVarSet = VarSet<String>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Type {
@@ -58,7 +75,7 @@ impl Type {
             Type::Arrow(l, r) => l.contains(v) || r.contains(v),
             Type::Variable(v1) => v1 == v,
             Type::Constructor(_) => false,
-            Type::Record(_) => todo!(),
+            Type::Record(r) => r.values().any(|t| t.contains(v)),
         }
     }
 }
