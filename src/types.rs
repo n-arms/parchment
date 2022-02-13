@@ -39,6 +39,7 @@ pub enum Type {
 pub enum Constructor {
     Boolean,
     Number,
+    Unit,
 }
 
 impl Type {
@@ -54,10 +55,29 @@ impl Type {
 
     pub fn contains(&self, v: &TypeVar) -> bool {
         match self {
-            Type::Arrow(l, r) => l.contains(&v) || r.contains(&v),
+            Type::Arrow(l, r) => l.contains(v) || r.contains(v),
             Type::Variable(v1) => v1 == v,
             Type::Constructor(_) => false,
             Type::Record(_) => todo!(),
+        }
+    }
+}
+
+pub trait Apply {
+    fn apply(&self, s: Substitution) -> Self;
+}
+
+impl Apply for Type {
+    fn apply(&self, s: Substitution) -> Type {
+        match self {
+            Type::Variable(v) => s.get(v).cloned().unwrap_or_else(|| self.clone()),
+            Type::Arrow(l, r) => Type::Arrow(Box::new(l.apply(s.clone())), Box::new(r.apply(s))),
+            Type::Constructor(_) => self.clone(),
+            Type::Record(r) => Type::Record(
+                r.iter()
+                    .map(|(k, v)| (k.clone(), v.apply(s.clone())))
+                    .collect(),
+            ),
         }
     }
 }
@@ -94,6 +114,7 @@ impl fmt::Display for Type {
                 match c {
                     Constructor::Boolean => "Bool",
                     Constructor::Number => "Num",
+                    Constructor::Unit => "Unit",
                 }
             ),
             Type::Record(r) => write!(f, "{:?}", r),
@@ -111,23 +132,17 @@ impl Scheme {
             .iter()
             .map(|old| (old.clone(), Type::Variable(free.fresh())))
             .collect();
-        apply(&self.1, &new_tvs)
+        self.1.apply(new_tvs)
     }
 }
 
 pub type Substitution = HashMap<TypeVar, Type>;
 
-pub fn apply(t: &Type, s: &Substitution) -> Type {
-    match t {
-        Type::Variable(v) => s.get(v).cloned().unwrap_or_else(|| t.clone()),
-        Type::Arrow(l, r) => Type::Arrow(Box::new(apply(l, s)), Box::new(apply(r, s))),
-        Type::Constructor(_) => t.clone(),
-        Type::Record(r) => Type::Record(r.iter().map(|(k, v)| (k.clone(), apply(v, s))).collect()),
-    }
-}
-
 pub fn combine(s1: Substitution, s2: Substitution) -> Substitution {
-    let mut s3: Substitution = s2.into_iter().map(|(u, t)| (u, apply(&t, &s1))).collect();
+    let mut s3: Substitution = s2
+        .into_iter()
+        .map(|(u, t)| (u, t.apply(s1.clone())))
+        .collect();
     s3.extend(s1);
 
     s3
@@ -148,9 +163,16 @@ mod test {
             Type::Constructor(Constructor::Number).free_type_vars(),
             HashSet::new()
         );
-        assert_eq!(Type::Variable(String::from("0")).free_type_vars(), HashSet::unit(String::from("0")));
         assert_eq!(
-            Type::Arrow(Box::new(Type::Variable(String::from("0"))), Box::new(Type::Variable(String::from("1")))).free_type_vars(),
+            Type::Variable(String::from("0")).free_type_vars(),
+            HashSet::unit(String::from("0"))
+        );
+        assert_eq!(
+            Type::Arrow(
+                Box::new(Type::Variable(String::from("0"))),
+                Box::new(Type::Variable(String::from("1")))
+            )
+            .free_type_vars(),
             HashSet::unit(String::from("0")).update(String::from("1"))
         );
     }
@@ -159,7 +181,10 @@ mod test {
         assert_eq!(
             Scheme(
                 HashSet::unit(String::from("0")),
-                Type::Arrow(Box::new(Type::Variable(String::from("0"))), Box::new(Type::Variable(String::from("1"))))
+                Type::Arrow(
+                    Box::new(Type::Variable(String::from("0"))),
+                    Box::new(Type::Variable(String::from("1")))
+                )
             )
             .free_type_vars(),
             HashSet::unit(String::from("1"))
@@ -167,7 +192,10 @@ mod test {
         assert_eq!(
             Scheme(
                 HashSet::unit(String::from("0")),
-                Type::Arrow(Box::new(Type::Variable(String::from("0"))), Box::new(Type::Variable(String::from("1"))))
+                Type::Arrow(
+                    Box::new(Type::Variable(String::from("0"))),
+                    Box::new(Type::Variable(String::from("1")))
+                )
             )
             .free_type_vars(),
             HashSet::unit(String::from("1"))

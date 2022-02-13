@@ -4,7 +4,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
     let raw_chars = prog.chars().collect::<Vec<_>>();
     let mut text = &raw_chars[..];
     let mut out: Vec<Token> = vec![];
-    while text.len() > 0 {
+    while !text.is_empty(){
         match text[0] {
             ';' => {
                 out.push(Token::Semicolon);
@@ -22,7 +22,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::Rpar);
                 text = &text[1..];
             }
-            ' ' | '\n' => text = &text[1..],
+            ' ' | '\n' | '\t' => text = &text[1..],
             '-' if text.len() > 1 && text[1] == '>' => {
                 out.push(Token::Rarrow);
                 text = &text[2..];
@@ -102,8 +102,10 @@ pub fn scan(prog: &str) -> Vec<Token> {
             c => {
                 if c.is_alphabetic() {
                     let mut buf = String::new();
-                    while text.len() > 0
+                    while !text.is_empty()
                         && text[0] != ' '
+                        && text[0] != '\n'
+                        && text[0] != '\t'
                         && text[0] != ')'
                         && text[0] != '('
                         && text[0] != '}'
@@ -111,6 +113,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
                         && text[0] != ':'
                         && text[0] != ','
                         && text[0] != '='
+                        && text[0] != ';'
                     {
                         buf.push(text[0]);
                         text = &text[1..];
@@ -118,7 +121,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
                     out.push(Token::Identifier(buf));
                 } else if c.is_numeric() {
                     let mut buf = String::new();
-                    while text.len() > 0 && (text[0].is_numeric() || text[0] == '.') {
+                    while !text.is_empty() && (text[0].is_numeric() || text[0] == '.') {
                         buf.push(text[0]);
                         text = &text[1..];
                     }

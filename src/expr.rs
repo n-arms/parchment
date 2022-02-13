@@ -1,6 +1,5 @@
-use super::types::{Scheme, Type, TypeVar, TypeVarSet, TypeEnv};
+use super::types::{Type, TypeVar, TypeVarSet};
 use im::hashmap::HashMap;
-use im::hashset::HashSet;
 use rand::prelude::*;
 use std::cmp;
 use std::fmt;
@@ -11,92 +10,76 @@ pub enum Pattern<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::H
     Record(HashMap<V, Pattern<V>>),
 }
 
-impl<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> Pattern<V> {
-    pub fn bound_vars(&self) -> HashSet<V> {
-        match self {
-            Pattern::Variable(s) => HashSet::unit(s.clone()),
-            Pattern::Record(r) => r.values().flat_map(|p| p.bound_vars()).collect(),
-        }
-    }
-    pub fn sub<U: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash>(
-        &self,
-        env: HashMap<V, U>,
-    ) -> Option<Pattern<U>> {
-        match self {
-            Self::Variable(v) => Some(Pattern::Variable(env.get(v)?.clone())),
-            Self::Record(r) => r
-                .iter()
-                .map(|(k, v)| Some((env.get(k)?.clone(), v.sub(env.clone())?)))
-                .collect::<Option<_>>()
-                .map(Pattern::Record),
-        }
-    }
-}
-
 impl Pattern<String> {
-    pub fn bindings(&self) -> HashSet<String> {
+    pub fn type_pattern(&self, t: &TypeVarSet) -> (HashMap<String, TypeVar>, Type) {
         match self {
-            Self::Variable(v) => HashSet::unit(v.clone()),
-            Self::Record(r) => r.values().flat_map(Pattern::bindings).collect()
-        }
-    }
-    pub fn into_type(&self, env: &HashMap<String, Type>) -> Type {
-        match self {
-            Pattern::Variable(s) => env.get(s).unwrap().clone(),
-            Pattern::Record(r) => super::types::Type::Record(
-                r.iter()
-                    .map(|(k, v)| (k.clone(), v.into_type(env)))
-                    .collect(),
-            ),
-        }
-    }
-}
-    /*
-    pub fn into_env(&self, i: &Infer, target: &Type) -> InferResult<HashMap<String, Scheme>> {
-        match self {
-            Pattern::Variable(s) => Ok(HashMap::unit(s.clone(), target.generalize(i))),
-            Pattern::Record(r1) => match target {
-                Type::Record(r2) => {
-                    r1.iter()
-                        .map(|(f, p)| {
-                            let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
-                            p.into_env(i, nt)
-                        }) // list of Result<Env, TypeError>
-                        .fold(Ok(HashMap::new()), |mut acc: Result<_, TypeError>, x| {
-                            let x = x?;
-                            acc.as_mut().map(|e| e.extend(x)).map_err(|e| e.clone())?;
-                            acc
-                        })
-                }
-                _ => Err(TypeError::IsntRecord(target.clone())),
-            },
-        }
-        todo!()
-    }
-    pub fn into_env_match(&self, i: &Infer, target: &Type) -> Result<Env, TypeError> {
-        match self {
-            Pattern::Variable(s) => Ok(Env(HashMap::unit(s.clone(), Scheme(HashSet::new(), target.clone())))),
-            Pattern::Record(r1) => match target {
-                Type::Record(r2) => {
-                    r1.iter()
-                        .map(|(f, p)| {
-                            let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
-                            p.into_env(env, nt)
-                        }) // list of Result<Env, TypeError>
-                        .fold(Ok(HashMap::new()), |mut acc : Result<_, TypeError>, x| {
-                            let x = x?;
-                            acc.as_mut()
-                                .map(|e| e.extend(x.0))
-                                .map_err(|e| e.clone())?;
-                            acc
-                        })
-                        .map(|e| Env(e))
-                },
-                _ => Err(TypeError::IsntRecord(target.clone()))
+            Pattern::Variable(v) => {
+                let b = t.fresh();
+                (HashMap::unit(v.clone(), b.clone()), Type::Variable(b))
+            }
+            Pattern::Record(r) => {
+                let (b, t) = r
+                    .iter()
+                    .map(|(var, val)| (var.clone(), val.type_pattern(t)))
+                    .fold(
+                        (HashMap::new(), HashMap::new()),
+                        |(mut bs, mut ts), (var, (b, t))| {
+                            bs.extend(b);
+                            ts.insert(var, t);
+                            (bs, ts)
+                        },
+                    );
+                (b, Type::Record(t))
             }
         }
     }
-    */
+}
+/*
+pub fn into_env(&self, i: &Infer, target: &Type) -> InferResult<HashMap<String, Scheme>> {
+    match self {
+        Pattern::Variable(s) => Ok(HashMap::unit(s.clone(), target.generalize(i))),
+        Pattern::Record(r1) => match target {
+            Type::Record(r2) => {
+                r1.iter()
+                    .map(|(f, p)| {
+                        let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
+                        p.into_env(i, nt)
+                    }) // list of Result<Env, TypeError>
+                    .fold(Ok(HashMap::new()), |mut acc: Result<_, TypeError>, x| {
+                        let x = x?;
+                        acc.as_mut().map(|e| e.extend(x)).map_err(|e| e.clone())?;
+                        acc
+                    })
+            }
+            _ => Err(TypeError::IsntRecord(target.clone())),
+        },
+    }
+    todo!()
+}
+pub fn into_env_match(&self, i: &Infer, target: &Type) -> Result<Env, TypeError> {
+    match self {
+        Pattern::Variable(s) => Ok(Env(HashMap::unit(s.clone(), Scheme(HashSet::new(), target.clone())))),
+        Pattern::Record(r1) => match target {
+            Type::Record(r2) => {
+                r1.iter()
+                    .map(|(f, p)| {
+                        let nt = r2.get(f).ok_or(TypeError::MissingRecordField(f.clone()))?;
+                        p.into_env(env, nt)
+                    }) // list of Result<Env, TypeError>
+                    .fold(Ok(HashMap::new()), |mut acc : Result<_, TypeError>, x| {
+                        let x = x?;
+                        acc.as_mut()
+                            .map(|e| e.extend(x.0))
+                            .map_err(|e| e.clone())?;
+                        acc
+                    })
+                    .map(|e| Env(e))
+            },
+            _ => Err(TypeError::IsntRecord(target.clone()))
+        }
+    }
+}
+*/
 
 #[derive(Clone, Debug)]
 pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
@@ -111,7 +94,6 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     Block(Vec<Statement<V>>),
 }
 
-pub type VarSet = TypeVarSet;
 /*
 impl Expr<String> {
     pub fn desugar(&self) -> Result<Expr<usize>, String> {

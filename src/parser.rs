@@ -32,6 +32,7 @@ macro_rules! check_eof {
 pub enum ParseError {
     NotIdentifier(Token),
     NotNumber(Token),
+    NotBoolean(Token),
     UnexpectedEof,
     UnexpectedToken(Token, Token),
     ExpectedAtLeastOneTerm,
@@ -52,7 +53,7 @@ pub fn many<'a, O, P: Fn(&'a [Token]) -> Result<O>>(
     Ok(Ok((res, text)))
 }
 
-pub fn parse_num<'a>(text: &'a [Token]) -> Result<'a, f64> {
+pub fn parse_num(text: &[Token]) -> Result<f64> {
     let token = text.get(0);
     if let Some(Token::Number(n)) = token {
         Ok(Ok((*n, &text[1..])))
@@ -63,7 +64,7 @@ pub fn parse_num<'a>(text: &'a [Token]) -> Result<'a, f64> {
     }
 }
 
-pub fn parse_id<'a>(text: &'a [Token]) -> Result<'a, String> {
+pub fn parse_id(text: &[Token]) -> Result<String> {
     let token = text.get(0);
     if let Some(Token::Identifier(i)) = token {
         Ok(Ok((i.clone(), &text[1..])))
@@ -74,12 +75,12 @@ pub fn parse_id<'a>(text: &'a [Token]) -> Result<'a, String> {
     }
 }
 
-pub fn parse_fun<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_fun(mut text: &[Token]) -> Result<Expr<String>> {
     expect!(Token::Fn, text, true);
     let (p, mut text) = many(parse_pattern, text)??;
     expect!(Token::Rarrow, text, false);
     let (b, text) = parse_expr(text)??;
-    if p.len() == 0 {
+    if p.is_empty() {
         return Err(ParseError::ExpectedAtLeastOnePattern);
     }
     let mut out = Expr::Function(p[p.len() - 1].clone(), Box::new(b));
@@ -89,32 +90,32 @@ pub fn parse_fun<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
     Ok(Ok((out, text)))
 }
 
-pub fn parse_app<'a>(text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_app(text: &[Token]) -> Result<Expr<String>> {
     let (apps, text) = match many(parse_non_app, text)? {
         Err(e) => return Ok(Err(e)),
         Ok(r) => r,
     };
-    if apps.len() == 0 {
+    if apps.is_empty() {
         return Ok(Err(ParseError::ExpectedAtLeastOneTerm));
     }
     if apps.len() == 1 {
         return Ok(Ok((apps[0].clone(), text)));
     }
     let mut res = Expr::Application(Box::new(apps[0].clone()), Box::new(apps[1].clone()));
-    for i in 2..apps.len() {
-        res = Expr::Application(Box::new(res), Box::new(apps[i].clone()));
+    for e in apps.into_iter().skip(2) {
+        res = Expr::Application(Box::new(res), Box::new(e));
     }
     Ok(Ok((res, text)))
 }
 
-pub fn parse_paren<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_paren(mut text: &[Token]) -> Result<Expr<String>> {
     expect!(Token::Lpar, text, true);
     let (e, mut text) = parse_expr(text)??;
     expect!(Token::Rpar, text, false);
     Ok(Ok((e, text)))
 }
 
-pub fn parse_if<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_if(mut text: &[Token]) -> Result<Expr<String>> {
     expect!(Token::If, text, true);
     let (p, mut text) = parse_expr(text)??;
     expect!(Token::Then, text, false);
@@ -125,9 +126,10 @@ pub fn parse_if<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
     Ok(Ok((Expr::If(Box::new(p), Box::new(c), Box::new(a)), text)))
 }
 
-pub fn parse_non_app<'a>(text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_non_app(text: &[Token]) -> Result<Expr<String>> {
     Ok(parse_num(text)?
         .map(|(n, text)| (Expr::Number(n), text))
+        .or_else(|_| parse_boolean(text)?.map(|(b, text)| (Expr::Boolean(b), text)))
         .or_else(|_| parse_id(text)?.map(|(id, text)| (Expr::Variable(id), text)))
         .or_else(|_| parse_fun(text)?)
         .or_else(|_| parse_if(text)?)
@@ -137,19 +139,19 @@ pub fn parse_non_app<'a>(text: &'a [Token]) -> Result<'a, Expr<String>> {
         .or_else(|_| parse_block(text)?))
 }
 
-pub fn parse_expr<'a>(text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_expr(text: &[Token]) -> Result<Expr<String>> {
     parse_app(text)
 }
 
-pub fn parse_pattern<'a>(text: &'a [Token]) -> Result<'a, Pattern<String>> {
+pub fn parse_pattern(text: &[Token]) -> Result<Pattern<String>> {
     Ok(parse_pattern_var(text)?.or_else(|_| parse_pattern_record(text)?))
 }
 
-pub fn parse_pattern_var<'a>(text: &'a [Token]) -> Result<'a, Pattern<String>> {
+pub fn parse_pattern_var(text: &[Token]) -> Result<Pattern<String>> {
     Ok(parse_id(text)?.map(|(id, text)| (Pattern::Variable(id), text)))
 }
 
-pub fn parse_pattern_record<'a>(mut text: &'a [Token]) -> Result<'a, Pattern<String>> {
+pub fn parse_pattern_record(mut text: &[Token]) -> Result<Pattern<String>> {
     expect!(Token::LBrace, text, true);
     check_eof!(text);
 
@@ -169,11 +171,11 @@ pub fn parse_pattern_record<'a>(mut text: &'a [Token]) -> Result<'a, Pattern<Str
     Ok(Ok((Pattern::Record(h), text)))
 }
 
-pub fn parse_statement<'a>(text: &'a [Token]) -> Result<'a, Statement<String>> {
-    Ok(parse_let(text)?.or_else(|_| parse_expr(text)?.map(|(e, text)| (Statement::Raw(e), text))))
+pub fn parse_statement(text: &[Token]) -> Result<Statement<String>> {
+    Ok(parse_let(text)?.or_else(|_| parse_expr_statement(text)?))
 }
 
-pub fn parse_let<'a>(mut text: &'a [Token]) -> Result<'a, Statement<String>> {
+pub fn parse_let(mut text: &[Token]) -> Result<Statement<String>> {
     expect!(Token::Let, text, true);
     let (p, mut text) = parse_pattern(text)??;
     expect!(Token::Eqs, text, false);
@@ -182,7 +184,13 @@ pub fn parse_let<'a>(mut text: &'a [Token]) -> Result<'a, Statement<String>> {
     Ok(Ok((Statement::Let(p, e), text)))
 }
 
-pub fn parse_block<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_expr_statement(text: &[Token]) -> Result<Statement<String>> {
+    let (e, mut text) = parse_expr(text)??;
+    expect!(Token::Semicolon, text, false);
+    Ok(Ok((Statement::Raw(e), text)))
+}
+
+pub fn parse_block(mut text: &[Token]) -> Result<Expr<String>> {
     expect!(Token::LBrace, text, true);
     check_eof!(text);
     let mut statements = Vec::new();
@@ -196,7 +204,7 @@ pub fn parse_block<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
     Ok(Ok((Expr::Block(statements), text)))
 }
 
-pub fn parse_match<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_match(mut text: &[Token]) -> Result<Expr<String>> {
     expect!(Token::Match, text, true);
     let (e, mut text) = parse_expr(text)??;
     expect!(Token::LBrace, text, false);
@@ -213,7 +221,18 @@ pub fn parse_match<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
     Ok(Ok((Expr::Match(Box::new(e), terms), text)))
 }
 
-pub fn parse_record_lit<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
+pub fn parse_boolean(text: &[Token]) -> Result<bool> {
+    check_eof!(text);
+    if text[0] == Token::True {
+        Ok(Ok((true, &text[1..])))
+    } else if text[0] == Token::False {
+        Ok(Ok((false, &text[1..])))
+    } else {
+        Ok(Err(ParseError::NotBoolean(text[0].clone())))
+    }
+}
+
+pub fn parse_record_lit(mut text: &[Token]) -> Result<Expr<String>> {
     expect!(Token::LBrace, text, true);
 
     let mut h = HashMap::new();
@@ -228,7 +247,6 @@ pub fn parse_record_lit<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
         expect!(Token::Comma, text, false);
         check_eof!(text);
         h.insert(field, val);
-
     } else {
         return Ok(Err(ParseError::NotIdentifier(text[0].clone())));
     }
@@ -253,7 +271,7 @@ pub fn parse_record_lit<'a>(mut text: &'a [Token]) -> Result<'a, Expr<String>> {
 }
 
 /*
-pub fn parse_match<'a>(tokens: &'a [Token]) -> Result<(Expr, &'a [Token]), ParseError> {
+pub fn parse_match(tokens: &[Token]) -> Result<(Expr, &Token]), ParseError> {
     expect!(Token::Match, tokens);
     let (m, tokens) = parse_expr(tokens)?;
     expect!(Token::LBrace, tokens);

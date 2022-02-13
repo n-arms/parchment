@@ -1,21 +1,65 @@
-use super::gen::{Constraint, TypeError};
-use super::types::{apply, combine, Substitution, Type};
-use im::HashMap;
+use super::gen::{Constraint, TypeError, Result};
+use super::types::{combine, Apply, Free, Substitution, Type, TypeVar, TypeVarSet};
+use im::{HashMap, HashSet};
 
-pub fn solve(cs: Vec<Constraint>) -> Result<Substitution, TypeError> {
-    let mut global = Substitution::default();
-    for c in cs {
-        match c {
-            Constraint::Equality(l, r) => {
-                global = combine(unify(&apply(&l, &global), &apply(&r, &global))?, global)
-            }
-            _ => todo!(),
+/// solve a given set of constraints, producing a substitution
+///
+/// runs in O(n^2) time though there is probably an O(n log n) algorithm
+pub fn solve(cs: HashSet<Constraint>, t: &TypeVarSet) -> Result<Substitution> {
+    if cs.is_empty() {
+        return Ok(Substitution::default());
+    }
+    let (c, cs) = next_solvable(cs)?;
+
+    match c {
+        Constraint::Equality(t1, t2) => {
+            let su1 = unify(&t1, &t2)?;
+            let su2 = solve(cs.into_iter().map(|c| c.apply(su1.clone())).collect(), t)?;
+            Ok(combine(su2, su1))
+        }
+        Constraint::InstanceOf(sub, m, sup) => {
+            let sup_gen = sup.generalize(m).instantiate(t);
+            solve(cs.update(Constraint::Equality(sub, sup_gen)), t)
         }
     }
-    Ok(global)
 }
 
-fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
+fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constraint>)> {
+    for c in &cs {
+        match c {
+            Constraint::Equality(t1, t2) => {
+                return Ok((Constraint::Equality(t1.clone(), t2.clone()), cs.without(c)))
+            }
+            Constraint::InstanceOf(_, m, sup) => {
+                let cs_active = cs
+                    .iter()
+                    .map(active_type_vars)
+                    .fold(HashSet::new(), HashSet::union);
+                let is_solvable = sup
+                    .free_type_vars()
+                    .relative_complement(m.clone())
+                    .intersection(cs_active)
+                    .is_empty();
+                if is_solvable {
+                    return Ok((c.clone(), cs.without(c)));
+                }
+            }
+        }
+    }
+
+    Err(TypeError::NoSolvableConstraints)
+}
+
+fn active_type_vars(c: &Constraint) -> HashSet<TypeVar> {
+    match c {
+        Constraint::Equality(t1, t2) => t1.free_type_vars().union(t2.free_type_vars()),
+        Constraint::InstanceOf(sub, m, sup) => sub
+            .free_type_vars()
+            .union(m.clone().intersection(sup.free_type_vars())),
+    }
+}
+
+fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
     match (t1, t2) {
         (Type::Variable(v), t) | (t, Type::Variable(v)) => {
             if t.contains(v) {
@@ -26,7 +70,7 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
         }
         (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
             let s1 = unify(l1, l2)?;
-            let s2 = unify(&apply(r1, &s1), &apply(r2, &s1))?;
+            let s2 = unify(&r1.apply(s1.clone()), &r2.apply(s1.clone()))?;
 
             Ok(combine(s2, s1))
         }
@@ -37,13 +81,23 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
                 Err(TypeError::ConstructorMismatch(c1.clone(), c2.clone()))
             }
         }
+        (Type::Record(r1), Type::Record(r2)) => {
+            let mut s = Substitution::new();
+            for (var, t1) in r1 {
+                let t2 = r2
+                    .get(var)
+                    .ok_or_else(|| TypeError::MissingField(var.clone()))?;
+                s = combine(unify(&t1.apply(s.clone()), &t2.apply(s.clone()))?, s);
+            }
+            Ok(s)
+        }
         (l, r) => todo!("({}, {})", l, r),
     }
 }
 
 #[cfg(test)]
 mod test {
-    use super::super::types::{Constructor, TypeEnv, TypeVarSet};
+    use super::super::types::{Constructor, TypeVarSet};
     use super::super::{
         expr::{Expr, Pattern},
         gen::*,
@@ -55,8 +109,10 @@ mod test {
 
     fn infer(s: &str) -> Type {
         let e = parse_expr(&scan(s)).unwrap().unwrap().0;
-        let (c, t1) = generate(&e, &TypeVarSet::new(), TypeEnv::new()).unwrap();
-        apply(&t1, &solve(c).unwrap())
+        let tvs = TypeVarSet::new();
+        let (a, c, t1) = generate(&e, &tvs, HashSet::new()).unwrap();
+        assert!(a.is_empty());
+        t1.apply(solve(c.into_iter().collect(), &tvs).unwrap())
     }
 
     // during early stages of testing I noticed some non-determainism arising from solving thanks
@@ -77,14 +133,15 @@ mod test {
                     Box::new(Expr::Variable(v2.clone())),
                 )),
             );
-            let (c, t) =
-                generate(&e, &TypeVarSet::new(), TypeEnv::new()).unwrap();
+            let tvs = TypeVarSet::new();
+            let (a, c, t) = generate(&e, &tvs, HashSet::new()).unwrap();
+            assert!(a.is_empty());
             println!("{} where", t);
             for c in &c {
                 println!("    {}", c);
             }
 
-            let new_t = apply(&t, &solve(c.clone()).unwrap());
+            let new_t = t.apply(solve(c.into_iter().collect(), &tvs).unwrap());
             if let Some(l) = last.as_ref() {
                 assert_eq!(l, &new_t);
             }
@@ -135,7 +192,7 @@ mod test {
 
         let s = unify(&t1, &t2).unwrap();
 
-        assert_eq!(apply(&v1, &s), apply(&v2, &s));
+        assert_eq!(v1.apply(s.clone()), v2.apply(s));
     }
 
     #[test]
