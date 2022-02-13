@@ -4,7 +4,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
     let raw_chars = prog.chars().collect::<Vec<_>>();
     let mut text = &raw_chars[..];
     let mut out: Vec<Token> = vec![];
-    while !text.is_empty(){
+    while !text.is_empty() {
         match text[0] {
             ';' => {
                 out.push(Token::Semicolon);

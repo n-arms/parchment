@@ -37,7 +37,7 @@ impl Pattern<String> {
     pub fn bound_vars(&self) -> HashSet<String> {
         match self {
             Pattern::Variable(v) => HashSet::unit(v.clone()),
-            Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect()
+            Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
         }
     }
 }

@@ -1,4 +1,4 @@
-use super::gen::{Constraint, TypeError, Result};
+use super::gen::{Constraint, Result, TypeError};
 use super::types::{combine, Apply, Free, Substitution, Type, TypeVar, TypeVarSet};
 use im::{HashMap, HashSet};
 

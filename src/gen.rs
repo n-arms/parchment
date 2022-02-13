@@ -161,7 +161,11 @@ pub fn gen_block(
                     .iter()
                     .filter_map(|(var, tv1)| {
                         let tv2 = bindings.get(var)?;
-                        Some(Constraint::InstanceOf(Type::Variable(tv1.clone()), m.clone(), Type::Variable(tv2.clone())))
+                        Some(Constraint::InstanceOf(
+                            Type::Variable(tv1.clone()),
+                            m.clone(),
+                            Type::Variable(tv2.clone()),
+                        ))
                     })
                     .collect();
                 c3.extend(c1);

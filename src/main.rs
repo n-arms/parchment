@@ -1,20 +1,21 @@
 mod expr;
 mod gen;
 mod lexer;
+mod lift;
 mod parser;
 mod solve;
 mod sub;
 mod token;
 mod types;
-mod lift;
+mod wasm;
 
 use gen::generate;
 use im::HashSet;
+use lift::lift;
 use solve::solve;
 use std::io::{self, BufRead, Write};
 use std::panic::{catch_unwind, RefUnwindSafe};
 use types::{Apply, Type, TypeVarSet, VarSet};
-use lift::lift;
 
 fn read_input() -> String {
     let mut parens = 0isize;
@@ -37,7 +38,7 @@ fn read_input() -> String {
 
 fn process(s: String) -> Type {
     let ast = parser::parse_expr(&lexer::scan(&s)).unwrap().unwrap().0;
-    
+
     let p = lift(&ast, HashSet::new(), (), &VarSet::default());
     println!("{:#?}", p);
 

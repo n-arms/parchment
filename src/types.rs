@@ -12,14 +12,14 @@ pub type TypeEnv = HashMap<String, Scheme>;
 #[derive(Debug, PartialEq, Eq)]
 pub struct VarSet<V> {
     index: Cell<usize>,
-    f: fn(usize) -> V
+    f: fn(usize) -> V,
 }
 
 impl<V> VarSet<V> {
     pub fn new(f: fn(usize) -> V) -> Self {
         VarSet {
             index: Cell::new(0),
-            f
+            f,
         }
     }
 
