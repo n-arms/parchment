@@ -17,21 +17,26 @@ pub enum Expr {
     /// a closure containing the function pointer and the set of variables to be put into an env
     Closure(usize, HashSet<String>),
     /// look up a variable from an env
-    EnvLookup(String),
-    /// evaluate all the expressions. This is what records desugar into
+    EnvLookup(usize),
+    /// evaluate all the expressions
     All(Vec<Expr>),
     /// ignore the result of an expression
     Ignore(Box<Expr>),
     /// assign the results of the expression to the given local variables. If an expression returns
     /// multiple values (using Expr::All), the nth value is assigned to the nth variable.
     /// Otherwise, the first variable has the value assigned to it
-    Assign(Vec<String>, Box<Expr>),
+    Assign(String, Box<Expr>),
+    /// evaluate all the expressions then pack them into a record on the heap
+    Record(Vec<Expr>),
+    /// look up the nth value in the record produced by evaluating e
+    RecordLookup(Box<Expr>, usize)
 }
 
 #[derive(Clone, Debug)]
 pub struct FunctionDef {
-    args: Vec<String>,
+    arg: String,
     body: Expr,
+    env: Vec<String>
 }
 
 #[derive(Clone, Debug)]
@@ -63,10 +68,23 @@ fn free_block(b: &[Statement<String>]) -> HashSet<String> {
     }
 }
 
+pub fn to_lookup(p: &Pattern<String>, base: Expr) -> Vec<Expr> {
+    match p {
+        Pattern::Variable(v) => vec![
+            Expr::Assign(v.clone(), Box::new(base))
+        ],
+        Pattern::Record(r) => {
+            let mut fields: Vec<_> = r.iter().collect();
+            fields.sort_by_key(|(name, _)| *name);
+            fields.into_iter().enumerate().flat_map(|(i, (_, p))| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i))).collect()
+        }
+    }
+}
+
 pub fn lift(
     e: &expr::Expr<String>,
     in_env: HashSet<String>,
-    v: (),
+    v: &VarSet<String>,
     fun: &FunSet,
 ) -> Result<Program, ()> {
     match e {
@@ -75,14 +93,21 @@ pub fn lift(
             let unbound = free(b).relative_complement(p.bound_vars());
 
             let mut body = lift(b, unbound.clone(), v, fun)?;
-            let mut args: Vec<_> = p.bound_vars().into_iter().collect();
-            args.sort();
+
+            let arg = v.fresh();
+
+            let mut lookup = to_lookup(p, Expr::Variable(arg.clone()));
+            lookup.push(body.main);
+
+            let mut env: Vec<_> = unbound.iter().cloned().collect();
+            env.sort();
 
             body.defs.insert(
                 0,
                 FunctionDef {
-                    args,
-                    body: body.main,
+                    arg,
+                    body: Expr::All(lookup),
+                    env
                 },
             );
             body.main = Expr::Closure(f_id, unbound);
@@ -106,9 +131,11 @@ pub fn lift(
         }),
         expr::Expr::Variable(v) => {
             if in_env.contains(v) {
+                let mut sorted: Vec<_> = in_env.into_iter().collect();
+                sorted.sort();
                 Ok(Program {
                     defs: Vec::new(),
-                    main: Expr::EnvLookup(v.clone()),
+                    main: Expr::EnvLookup(sorted.binary_search(v).unwrap()),
                 })
             } else {
                 Ok(Program {
@@ -131,7 +158,7 @@ pub fn lift(
             }
             Ok(Program {
                 defs,
-                main: Expr::All(main),
+                main: Expr::Record(main),
             })
         }
         expr::Expr::If(p, c, a) => {
@@ -149,10 +176,11 @@ pub fn lift(
             for (i, stmt) in b.iter().enumerate() {
                 match stmt {
                     Statement::Let(p, b) => {
-                        let mut vars: Vec<_> = p.bound_vars().into_iter().collect();
-                        vars.sort();
+                        let temp = v.fresh();
+                        let lookup = to_lookup(p, Expr::Variable(temp.clone()));
                         let Program { main, defs: d } = lift(b, in_env.clone(), v, fun)?;
-                        exprs.push(Expr::Assign(vars, Box::new(main)));
+                        exprs.push(Expr::Assign(temp, Box::new(main)));
+                        exprs.extend(lookup);
                         defs.extend(d);
                     }
                     Statement::Raw(e) => {

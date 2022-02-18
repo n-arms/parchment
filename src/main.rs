@@ -39,7 +39,7 @@ fn read_input() -> String {
 fn process(s: String) -> Type {
     let ast = parser::parse_expr(&lexer::scan(&s)).unwrap().unwrap().0;
 
-    let p = lift(&ast, HashSet::new(), (), &VarSet::default());
+    let p = lift(&ast, HashSet::new(), &VarSet::default(), &VarSet::default());
     println!("{:#?}", p);
 
     let tvs = TypeVarSet::default();
