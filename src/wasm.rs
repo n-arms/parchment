@@ -29,13 +29,43 @@ impl Value {
     }
 }
 
+/// a web assembly instruction
 #[derive(Clone, Debug)]
 pub enum Instruction {
+    /// pop two values of type t off the stack, add them, push the result onto the stack
     Add(Type),
+    /// pop two values of type t off the stack, multiply them, push the result onto the stack
     Mul(Type),
+    /// pop two values of type t off the stack, left shift the first by the second, push the result onto the stack
+    LeftShift(Type),
+    /// pop two values of type t off the stack, right shift the first by the second, push the result onto the stack
+    RightShift(Type),
+    /// push the value in register s onto the stack
     GetLocal(String),
+    /// pop 1 value off the top of the stack and assign it to register s
     SetLocal(String),
+    /// equivilant to [SetLocal(s), GetLocal(s)]
+    TeeLocal(String),
+    /// push the value in global s onto the stack
+    GetGlobal(String),
+    /// pop 1 value off the top of the stack and assign it to global s
+    SetGlobal(String),
+    /// pop an address: i32 off the stack, look it up in linear memory and push the value of type t onto the stack
+    Load(Type),
+    /// pop an address: i32 and a value: t off the stack and assign the value to the address
+    Store(Type),
+    /// pop a value of type t2 off the stack, reinterpret it as t1 and push it back onto the stack. 
+    /// This operation does not change the bits of the value, it just changes the type
+    Reinterpret(Type, Type),
+    /// pop a value of type t2 off the stack, shrink it to the appropriate size and push a value of
+    /// type t1 onto the stack. This operation converts large values into small values.
+    Wrap(Type, Type),
+    /// pop a value of type t2 off the stack, grow it to the appropriate size and push a value of
+    /// type t1 onto the stack. This operation converts small values into large values.
+    Extend(Type, Type),
+    /// pop a function pointer of type s off the top of the stack, then call it
     CallIndirect(String),
+    /// load a constant value onto the stack
     Const(Value),
 }
 
@@ -89,7 +119,6 @@ impl Wasm {
                 acc
             })
         ));
-        for elem in &self.elems {}
         for (name, signature) in &self.types {
             w.line(format!("(type ${} {})", name, signature));
         }
@@ -153,12 +182,22 @@ impl FunctionDef {
 impl Instruction {
     pub fn format(&self, w: &mut WATFormatter) {
         match self {
+            Instruction::Const(r) => w.line(r.load_const()),
             Instruction::Add(t) => w.line(format!("{}.add", t)),
             Instruction::Mul(t) => w.line(format!("{}.mul", t)),
+            Instruction::LeftShift(t) => w.line(format!("{}.shl", t)),
+            Instruction::RightShift(t) => w.line(format!("{}.shr_u", t)),
             Instruction::GetLocal(l) => w.line(format!("local.get ${}", l)),
             Instruction::SetLocal(l) => w.line(format!("local.set ${}", l)),
+            Instruction::TeeLocal(l) => w.line(format!("local.tee ${}", l)),
+            Instruction::GetGlobal(g) => w.line(format!("global.get ${}", g)),
+            Instruction::SetGlobal(g) => w.line(format!("global.set ${}", g)),
+            Instruction::Load(t) => w.line(format!("{}.load", t)),
+            Instruction::Store(t) => w.line(format!("{}.store", t)),
+            Instruction::Reinterpret(new, old) => w.line(format!("{}.reinterpret_{}", new, old)),
+            Instruction::Wrap(new, old) => w.line(format!("{}.wrap_{}", new, old)),
+            Instruction::Extend(new, old) => w.line(format!("{}.extend_{}_u", new, old)),
             Instruction::CallIndirect(t) => w.line(format!("call_indirect (type ${})", t)),
-            Instruction::Const(r) => w.line(r.load_const()),
         }
     }
 }
