@@ -9,6 +9,15 @@ pub enum Type {
     F64,
 }
 
+impl Type {
+    pub fn bits(&self) -> usize {
+        match self {
+            Self::I32 | Self::F32 => 32,
+            Self::I64 | Self::F64 => 64,
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Value {
     I32(i32),
@@ -40,6 +49,10 @@ pub enum Instruction {
     LeftShift(Type),
     /// pop two values of type t off the stack, right shift the first by the second, push the result onto the stack
     RightShift(Type),
+    /// pop two values of type t off the stack, and them, push the result onto the stack
+    Or(Type),
+    /// pop two values of type t off the stack, or them, push the result onto the stack
+    And(Type),
     /// push the value in register s onto the stack
     GetLocal(String),
     /// pop 1 value off the top of the stack and assign it to register s
@@ -72,35 +85,35 @@ pub enum Instruction {
 #[derive(Clone, Debug)]
 pub struct FunctionDef {
     /// the list of arguments and their types
-    args: Vec<(String, Type)>,
+    pub args: Vec<(String, Type)>,
     /// the list of local variables and their types
-    locals: Vec<(String, Type)>,
+    pub locals: Vec<(String, Type)>,
     /// the return type
-    return_type: Type,
+    pub return_type: Type,
     /// the instructions
-    body: Vec<Instruction>,
+    pub body: Vec<Instruction>,
     /// the function name
-    name: Option<String>,
+    pub name: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct Wasm {
     /// the list of function definitions
-    defs: Vec<FunctionDef>,
+    pub defs: Vec<FunctionDef>,
     /// functions to be exported
-    exports: Vec<String>,
+    pub exports: Vec<String>,
     /// the user defined type aliases (to be used with call_indirect)
-    types: HashMap<String, String>,
+    pub types: HashMap<String, String>,
     /// the list of tables. Each table has a length and a contained type
-    tables: Vec<(usize, String)>,
+    pub tables: Vec<(usize, String)>,
     /// the list of global variables, their types and their values
-    globals: Vec<(String, Type, Value)>,
+    pub globals: Vec<(String, Type, Value)>,
     /// the list of linear memory blocks. Each block has a length and a name
-    memory: Vec<(usize, String)>,
+    pub memory: Vec<(usize, String)>,
     /// the offset of elements in the function table
-    elem_offset: usize,
+    pub elem_offset: usize,
     /// the elements in the function table
-    elems: Vec<String>,
+    pub elems: Vec<String>,
 }
 
 impl Wasm {
@@ -131,7 +144,7 @@ impl Wasm {
             ));
         }
         for (size, name) in &self.memory {
-            w.line(format!("(memory ${} {})", size, name));
+            w.line(format!("(memory ${} {})", name, size));
         }
         for def in &self.defs {
             def.format(w);
@@ -187,6 +200,8 @@ impl Instruction {
             Instruction::Mul(t) => w.line(format!("{}.mul", t)),
             Instruction::LeftShift(t) => w.line(format!("{}.shl", t)),
             Instruction::RightShift(t) => w.line(format!("{}.shr_u", t)),
+            Instruction::Or(t) => w.line(format!("{}.or", t)),
+            Instruction::And(t) => w.line(format!("{}.and", t)),
             Instruction::GetLocal(l) => w.line(format!("local.get ${}", l)),
             Instruction::SetLocal(l) => w.line(format!("local.set ${}", l)),
             Instruction::TeeLocal(l) => w.line(format!("local.tee ${}", l)),

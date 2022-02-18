@@ -14,8 +14,8 @@ pub enum Expr {
     Number(f64),
     Boolean(bool),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    /// a closure containing the function pointer and the set of variables to be put into an env
-    Closure(usize, HashSet<String>),
+    /// a closure containing the function pointer and the set of values to be put into an env
+    Closure(usize, Vec<Expr>),
     /// look up a variable from an env
     EnvLookup(usize),
     /// evaluate all the expressions
@@ -34,15 +34,16 @@ pub enum Expr {
 
 #[derive(Clone, Debug)]
 pub struct FunctionDef {
-    arg: String,
-    body: Expr,
-    env: Vec<String>
+    pub arg: String,
+    pub body: Expr,
+    pub env: Vec<String>,
+    pub locals: HashSet<String>
 }
 
 #[derive(Clone, Debug)]
 pub struct Program {
-    defs: Vec<FunctionDef>,
-    main: Expr,
+    pub defs: Vec<FunctionDef>,
+    pub main: Expr,
 }
 
 fn free(e: &expr::Expr<String>) -> HashSet<String> {
@@ -61,8 +62,8 @@ fn free(e: &expr::Expr<String>) -> HashSet<String> {
 fn free_block(b: &[Statement<String>]) -> HashSet<String> {
     match b {
         [Statement::Let(p, b), rest @ ..] => free(b)
-            .relative_complement(p.bound_vars())
-            .union(free_block(rest)),
+            .union(free_block(rest))
+            .relative_complement(p.bound_vars()),
         [Statement::Raw(e), rest @ ..] => free(e).union(free_block(rest)),
         [] => HashSet::new(),
     }
@@ -83,39 +84,46 @@ pub fn to_lookup(p: &Pattern<String>, base: Expr) -> Vec<Expr> {
 
 pub fn lift(
     e: &expr::Expr<String>,
-    in_env: HashSet<String>,
+    current_env: &[String],
     v: &VarSet<String>,
     fun: &FunSet,
 ) -> Result<Program, ()> {
     match e {
         expr::Expr::Function(p, b) => {
             let f_id = fun.fresh();
-            let unbound = free(b).relative_complement(p.bound_vars());
+            let mut env: Vec<_> = free(b).relative_complement(p.bound_vars()).into_iter().collect();
+            env.sort();
 
-            let mut body = lift(b, unbound.clone(), v, fun)?;
+            let mut body = lift(b, &env, v, fun)?;
 
             let arg = v.fresh();
 
             let mut lookup = to_lookup(p, Expr::Variable(arg.clone()));
             lookup.push(body.main);
-
-            let mut env: Vec<_> = unbound.iter().cloned().collect();
-            env.sort();
+            
+            let full_body = Expr::All(lookup);
+            let locals = locals(&full_body);
 
             body.defs.insert(
                 0,
                 FunctionDef {
                     arg,
-                    body: Expr::All(lookup),
-                    env
+                    body: full_body,
+                    env: env.clone(),
+                    locals
                 },
             );
-            body.main = Expr::Closure(f_id, unbound);
+            let new_env = env.into_iter().map(|name| if let Ok(i) = current_env.binary_search(&name) {
+                Expr::EnvLookup(i)
+            } else {
+                Expr::Variable(name)
+            }).collect();
+            body.main = Expr::Closure(f_id, new_env);
             Ok(body)
         }
         expr::Expr::Application(e1, e2) => {
-            let mut p1 = lift(e1, in_env.clone(), v, fun)?;
-            let Program { defs, main } = lift(e2, in_env, v, fun)?;
+            let mut p1 = lift(e1, &current_env, v, fun)?;
+            let Program { defs, main } = lift(e2, current_env, v, fun)?;
 
             p1.defs.extend(defs);
             p1.main = Expr::Application(Box::new(p1.main), Box::new(main));
@@ -130,12 +138,10 @@ pub fn lift(
             main: Expr::Boolean(*b),
         }),
         expr::Expr::Variable(v) => {
-            if in_env.contains(v) {
-                let mut sorted: Vec<_> = in_env.into_iter().collect();
-                sorted.sort();
+            if let Ok(i) = current_env.binary_search(v) {
                 Ok(Program {
                     defs: Vec::new(),
-                    main: Expr::EnvLookup(sorted.binary_search(v).unwrap()),
+                    main: Expr::EnvLookup(i),
                 })
             } else {
                 Ok(Program {
@@ -147,7 +153,7 @@ pub fn lift(
         expr::Expr::Record(r) => {
             let mut terms: Vec<(String, Program)> = r
                 .iter()
-                .map(|(var, e)| Ok((var.clone(), lift(e, in_env.clone(), v, fun)?)))
+                .map(|(var, e)| Ok((var.clone(), lift(e, &current_env, v, fun)?)))
                 .collect::<Result<_, _>>()?;
             terms.sort_by_key(|(var, _)| var.clone());
             let mut defs = Vec::new();
@@ -162,9 +168,9 @@ pub fn lift(
             })
         }
         expr::Expr::If(p, c, a) => {
-            let mut p1 = lift(p, in_env.clone(), v, fun)?;
-            let p2 = lift(c, in_env.clone(), v, fun)?;
-            let p3 = lift(a, in_env, v, fun)?;
+            let mut p1 = lift(p, &current_env, v, fun)?;
+            let p2 = lift(c, &current_env, v, fun)?;
+            let p3 = lift(a, current_env, v, fun)?;
             p1.defs.extend(p2.defs);
             p1.defs.extend(p3.defs);
             p1.main = Expr::If(Box::new(p1.main), Box::new(p2.main), Box::new(p3.main));
@@ -178,13 +184,13 @@ pub fn lift(
                     Statement::Let(p, b) => {
                         let temp = v.fresh();
                         let lookup = to_lookup(p, Expr::Variable(temp.clone()));
-                        let Program { main, defs: d } = lift(b, in_env.clone(), v, fun)?;
+                        let Program { main, defs: d } = lift(b, &current_env, v, fun)?;
                         exprs.push(Expr::Assign(temp, Box::new(main)));
                         exprs.extend(lookup);
                         defs.extend(d);
                     }
                     Statement::Raw(e) => {
-                        let Program { main, defs: d } = lift(e, in_env.clone(), v, fun)?;
+                        let Program { main, defs: d } = lift(e, &current_env, v, fun)?;
                         exprs.push(if i == b.len() - 1 {
                             main
                         } else {
@@ -202,3 +208,19 @@ pub fn lift(
         expr::Expr::Match(_, _) => todo!(),
     }
 }
+
+pub fn locals(e: &self::Expr) -> HashSet<String> {
+    match e {
+        Expr::Variable(_) |
+        Expr::Number(_) |
+        Expr::Boolean(_) |
+        Expr::RecordLookup(_, _) |
+        Expr::EnvLookup(_) => HashSet::new(),
+        Expr::Application(e1, e2) => locals(e1).union(locals(e2)),
+        Expr::All(es) | Expr::Record(es) | Expr::Closure(_, es) => es.iter().flat_map(locals).collect(),
+        Expr::Ignore(e) => locals(e),
+        Expr::Assign(v, e) => locals(e).update(v.clone()),
+        Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),
+    }
+}
+
