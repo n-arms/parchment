@@ -4,7 +4,6 @@ use im::hashmap::HashMap;
 use im::hashset::HashSet;
 use std::cell::Cell;
 use std::fmt;
-use std::marker::PhantomData;
 
 pub type TypeVar = String;
 pub type TypeEnv = HashMap<String, Scheme>;

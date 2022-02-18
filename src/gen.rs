@@ -82,7 +82,7 @@ pub fn generate(
         // to type vars, as well as the overall type of the pattern
         Expr::Function(p, b) => {
             let (bindings, tp) = p.type_pattern(t);
-            let (mut a1, c1, t1) = generate(b, t, m.union(bindings.keys().collect()))?;
+            let (mut a1, c1, t1) = generate(b, t, m.union(bindings.values().collect()))?;
             let mut c2: Vec<_> = a1
                 .iter()
                 .filter_map(|(var, tv1)| {

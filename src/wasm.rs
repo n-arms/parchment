@@ -67,7 +67,7 @@ pub enum Instruction {
     Load(Type),
     /// pop an address: i32 and a value: t off the stack and assign the value to the address
     Store(Type),
-    /// pop a value of type t2 off the stack, reinterpret it as t1 and push it back onto the stack. 
+    /// pop a value of type t2 off the stack, reinterpret it as t1 and push it back onto the stack.
     /// This operation does not change the bits of the value, it just changes the type
     Reinterpret(Type, Type),
     /// pop a value of type t2 off the stack, shrink it to the appropriate size and push a value of
@@ -223,7 +223,7 @@ impl fmt::Display for WATFormatter {
             for _ in 0..*indent {
                 write!(f, "\t")?;
             }
-            write!(f, "{}\n", line)?;
+            writeln!(f, "{}", line)?;
         }
         Ok(())
     }

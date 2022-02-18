@@ -1,6 +1,6 @@
 use super::expr::{self, Pattern, Statement};
 use super::types::VarSet;
-use im::{hashmap, HashMap, HashSet};
+use im::HashSet;
 
 type FunSet = VarSet<usize>;
 
@@ -29,7 +29,7 @@ pub enum Expr {
     /// evaluate all the expressions then pack them into a record on the heap
     Record(Vec<Expr>),
     /// look up the nth value in the record produced by evaluating e
-    RecordLookup(Box<Expr>, usize)
+    RecordLookup(Box<Expr>, usize),
 }
 
 #[derive(Clone, Debug)]
@@ -37,7 +37,7 @@ pub struct FunctionDef {
     pub arg: String,
     pub body: Expr,
     pub env: Vec<String>,
-    pub locals: HashSet<String>
+    pub locals: HashSet<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -71,13 +71,15 @@ fn free_block(b: &[Statement<String>]) -> HashSet<String> {
 
 pub fn to_lookup(p: &Pattern<String>, base: Expr) -> Vec<Expr> {
     match p {
-        Pattern::Variable(v) => vec![
-            Expr::Assign(v.clone(), Box::new(base))
-        ],
+        Pattern::Variable(v) => vec![Expr::Assign(v.clone(), Box::new(base))],
         Pattern::Record(r) => {
             let mut fields: Vec<_> = r.iter().collect();
             fields.sort_by_key(|(name, _)| *name);
-            fields.into_iter().enumerate().flat_map(|(i, (_, p))| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i))).collect()
+            fields
+                .into_iter()
+                .enumerate()
+                .flat_map(|(i, (_, p))| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
+                .collect()
         }
     }
 }
@@ -91,7 +93,10 @@ pub fn lift(
     match e {
         expr::Expr::Function(p, b) => {
             let f_id = fun.fresh();
-            let mut env: Vec<_> = free(b).relative_complement(p.bound_vars()).into_iter().collect();
+            let mut env: Vec<_> = free(b)
+                .relative_complement(p.bound_vars())
+                .into_iter()
+                .collect();
             env.sort();
 
             let mut body = lift(b, &env, v, fun)?;
@@ -100,7 +105,7 @@ pub fn lift(
 
             let mut lookup = to_lookup(p, Expr::Variable(arg.clone()));
             lookup.push(body.main);
-            
+
             let full_body = Expr::All(lookup);
             let locals = locals(&full_body);
 
@@ -110,19 +115,24 @@ pub fn lift(
                     arg,
                     body: full_body,
                     env: env.clone(),
-                    locals
+                    locals,
                 },
             );
-            let new_env = env.into_iter().map(|name| if let Ok(i) = current_env.binary_search(&name) {
-                Expr::EnvLookup(i)
-            } else {
-                Expr::Variable(name)
-            }).collect();
+            let new_env = env
+                .into_iter()
+                .map(|name| {
+                    if let Ok(i) = current_env.binary_search(&name) {
+                        Expr::EnvLookup(i)
+                    } else {
+                        Expr::Variable(name)
+                    }
+                })
+                .collect();
             body.main = Expr::Closure(f_id, new_env);
             Ok(body)
         }
         expr::Expr::Application(e1, e2) => {
-            let mut p1 = lift(e1, &current_env, v, fun)?;
+            let mut p1 = lift(e1, current_env, v, fun)?;
             let Program { defs, main } = lift(e2, current_env, v, fun)?;
 
             p1.defs.extend(defs);
@@ -153,7 +163,7 @@ pub fn lift(
         expr::Expr::Record(r) => {
             let mut terms: Vec<(String, Program)> = r
                 .iter()
-                .map(|(var, e)| Ok((var.clone(), lift(e, &current_env, v, fun)?)))
+                .map(|(var, e)| Ok((var.clone(), lift(e, current_env, v, fun)?)))
                 .collect::<Result<_, _>>()?;
             terms.sort_by_key(|(var, _)| var.clone());
             let mut defs = Vec::new();
@@ -168,8 +178,8 @@ pub fn lift(
             })
         }
         expr::Expr::If(p, c, a) => {
-            let mut p1 = lift(p, &current_env, v, fun)?;
-            let p2 = lift(c, &current_env, v, fun)?;
+            let mut p1 = lift(p, current_env, v, fun)?;
+            let p2 = lift(c, current_env, v, fun)?;
             let p3 = lift(a, current_env, v, fun)?;
             p1.defs.extend(p2.defs);
             p1.defs.extend(p3.defs);
@@ -184,13 +194,13 @@ pub fn lift(
                     Statement::Let(p, b) => {
                         let temp = v.fresh();
                         let lookup = to_lookup(p, Expr::Variable(temp.clone()));
-                        let Program { main, defs: d } = lift(b, &current_env, v, fun)?;
+                        let Program { main, defs: d } = lift(b, current_env, v, fun)?;
                         exprs.push(Expr::Assign(temp, Box::new(main)));
                         exprs.extend(lookup);
                         defs.extend(d);
                     }
                     Statement::Raw(e) => {
-                        let Program { main, defs: d } = lift(e, &current_env, v, fun)?;
+                        let Program { main, defs: d } = lift(e, current_env, v, fun)?;
                         exprs.push(if i == b.len() - 1 {
                             main
                         } else {
@@ -211,16 +221,17 @@ pub fn lift(
 
 pub fn locals(e: &self::Expr) -> HashSet<String> {
     match e {
-        Expr::Variable(_) |
-        Expr::Number(_) |
-        Expr::Boolean(_) |
-        Expr::RecordLookup(_, _) |
-        Expr::EnvLookup(_) => HashSet::new(),
+        Expr::Variable(_)
+        | Expr::Number(_)
+        | Expr::Boolean(_)
+        | Expr::RecordLookup(_, _)
+        | Expr::EnvLookup(_) => HashSet::new(),
         Expr::Application(e1, e2) => locals(e1).union(locals(e2)),
-        Expr::All(es) | Expr::Record(es) | Expr::Closure(_, es) => es.iter().flat_map(locals).collect(),
+        Expr::All(es) | Expr::Record(es) | Expr::Closure(_, es) => {
+            es.iter().flat_map(locals).collect()
+        }
         Expr::Ignore(e) => locals(e),
         Expr::Assign(v, e) => locals(e).update(v.clone()),
         Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),
     }
 }
-
