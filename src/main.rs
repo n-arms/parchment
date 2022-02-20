@@ -79,7 +79,7 @@ fn type_debug(text: String) {
         println!("\t{}", constr);
     }
 
-    let s = solve(c.clone().into_iter().collect(), &tvs).unwrap();
+    let s = solve(c.into_iter().collect(), &tvs).unwrap();
     println!("{}\n:: {}", ast, t.apply(s));
 }
 

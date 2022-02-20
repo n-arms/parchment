@@ -56,12 +56,16 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     Block(Vec<Statement<V>>),
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Copy)]
 pub enum Operator {
     Plus,
     Minus,
     Times,
     Equals,
+    LessThan,
+    LessThanEqual,
+    GreaterThan,
+    GreaterThanEqual,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,16 +190,8 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
     match e {
         Expr::Application(l, r) => format!(
             "{} {}",
-            if matches!(l.as_ref(), Expr::Function(..)) {
-                format!("({})", show_expr(margin, l))
-            } else {
-                format!("({})", show_expr(margin, l))
-            },
-            if matches!(r.as_ref(), Expr::Application(..)) {
-                format!("({})", show_expr(margin, r))
-            } else {
-                format!("({})", show_expr(margin, r))
-            }
+            format!("({})", show_expr(margin, l)),
+            format!("({})", show_expr(margin, r))
         ),
         Expr::Number(n) => n.to_string(),
         Expr::Boolean(b) => b.to_string(),
@@ -245,10 +241,14 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
                 acc
             })
         ),
-        Expr::Operator(Operator::Equals) => format!("=="),
-        Expr::Operator(Operator::Times) => format!("*"),
-        Expr::Operator(Operator::Plus) => format!("+"),
-        Expr::Operator(Operator::Minus) => format!("-"),
+        Expr::Operator(Operator::Equals) => String::from("=="),
+        Expr::Operator(Operator::Times) => String::from("*"),
+        Expr::Operator(Operator::Plus) => String::from("+"),
+        Expr::Operator(Operator::Minus) => String::from("-"),
+        Expr::Operator(Operator::LessThan) => String::from("<"),
+        Expr::Operator(Operator::LessThanEqual) => String::from("<="),
+        Expr::Operator(Operator::GreaterThan) => String::from(">"),
+        Expr::Operator(Operator::GreaterThanEqual) => String::from(">="),
         e => format!("fn {}", show_tailing_fn(margin, e)),
     }
 }

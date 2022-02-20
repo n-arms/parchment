@@ -6,6 +6,22 @@ pub fn scan(prog: &str) -> Vec<Token> {
     let mut out: Vec<Token> = vec![];
     while !text.is_empty() {
         match text[0] {
+            '>' if text.len() > 1 && text[1] == '=' => {
+                out.push(Token::LessThanEquals);
+                text = &text[2..];
+            }
+            '>' => {
+                out.push(Token::LessThan);
+                text = &text[1..];
+            }
+            '<' if text.len() > 1 && text[1] == '=' => {
+                out.push(Token::GreaterThanEquals);
+                text = &text[2..];
+            }
+            '<' => {
+                out.push(Token::GreaterThan);
+                text = &text[1..];
+            }
             ';' => {
                 out.push(Token::Semicolon);
                 text = &text[1..];

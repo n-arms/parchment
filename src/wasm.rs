@@ -43,12 +43,26 @@ impl Value {
 pub enum Instruction {
     /// pop two values of type t off the stack, add them, push the result onto the stack
     Add(Type),
+    /// pop two values of type t off the stack, subtract them, push the result onto the stack
+    Sub(Type),
     /// pop two values of type t off the stack, multiply them, push the result onto the stack
     Mul(Type),
     /// pop two values of type t off the stack, left shift the first by the second, push the result onto the stack
     LeftShift(Type),
     /// pop two values of type t off the stack, right shift the first by the second, push the result onto the stack
     RightShift(Type),
+    /// pop two values of type t off the stack, check if the first is less than the other, push the
+    /// result onto the stack
+    LessThan(Type),
+    /// pop two values of type t off the stack, check if the first is less than or equal to the other, push the
+    /// result onto the stack
+    LessThanEqual(Type),
+    /// pop two values of type t off the stack, check if the first is greater than the other, push the
+    /// result onto the stack
+    GreaterThan(Type),
+    /// pop two values of type t off the stack, check if the first is greater than or equal to the other, push the
+    /// result onto the stack
+    GreaterThanEqual(Type),
     /// pop two values of type t off the stack, and them, push the result onto the stack
     Or(Type),
     /// pop two values of type t off the stack, or them, push the result onto the stack
@@ -200,6 +214,7 @@ impl Instruction {
         match self {
             Instruction::Const(r) => w.line(r.load_const()),
             Instruction::Add(t) => w.line(format!("{}.add", t)),
+            Instruction::Sub(t) => w.line(format!("{}.sub", t)),
             Instruction::Mul(t) => w.line(format!("{}.mul", t)),
             Instruction::LeftShift(t) => w.line(format!("{}.shl", t)),
             Instruction::RightShift(t) => w.line(format!("{}.shr_u", t)),
@@ -236,6 +251,10 @@ impl Instruction {
                 w.dec();
                 w.line(")");
             }
+            Instruction::LessThan(t) => w.line(format!("{}.lt", t)),
+            Instruction::LessThanEqual(t) => w.line(format!("{}.le", t)),
+            Instruction::GreaterThan(t) => w.line(format!("{}.gt", t)),
+            Instruction::GreaterThanEqual(t) => w.line(format!("{}.ge", t)),
         }
     }
 }

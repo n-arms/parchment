@@ -24,17 +24,17 @@ fn record<L, R>(
     lhs: impl Parser<Token, L, Error = Simple<Token>> + Clone,
     rhs: impl Parser<Token, R, Error = Simple<Token>> + Clone,
 ) -> impl Parser<Token, Vec<(L, R)>, Error = Simple<Token>> + Clone {
-
-    let pair = lhs.clone()
+    let pair = lhs
         .then_ignore(just(Token::Colon))
-        .then(rhs.clone());
+        .then(rhs);
 
-    let field_list = pair.clone().then_ignore(just(Token::Comma))
+    let field_list = pair
+        .clone()
+        .then_ignore(just(Token::Comma))
         .repeated()
         .then(pair)
         .map(|(xs, x)| xs.into_iter().chain(vec![x]).collect());
-    field_list
-        .delimited_by(just(Token::LBrace), just(Token::RBrace))
+    field_list.delimited_by(just(Token::LBrace), just(Token::RBrace))
 }
 
 fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
@@ -50,9 +50,8 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
 
         let pattern = recursive(|pattern| {
             variable
-                .clone()
                 .map(Pattern::Variable)
-                .or(record(variable.clone(), pattern.clone())
+                .or(record(variable, pattern.clone())
                     .map(|v| Pattern::Record(v.into_iter().collect())))
         });
 
@@ -67,8 +66,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then_ignore(just(Token::Eqs))
             .then(expr.clone())
             .map(|(p, e)| Statement::Let(p, e))
-            .or(expr.clone()
-                .map(Statement::Raw))
+            .or(expr.clone().map(Statement::Raw))
             .then_ignore(just(Token::Semicolon));
 
         let block = just(Token::LBrace)
@@ -76,13 +74,25 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then_ignore(just(Token::RBrace))
             .map(Expr::Block);
 
-        let parens = expr.clone().delimited_by(just(Token::Lpar), just(Token::Rpar));
-        let record_lit = record(variable.clone(), expr.clone()).map(|v| Expr::Record(v.into_iter().collect()));
+        let if_ = just(Token::If)
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::Then))
+            .then(expr.clone())
+            .then_ignore(just(Token::Else))
+            .then(expr.clone())
+            .map(|((p, c), a)| Expr::If(Box::new(p), Box::new(c), Box::new(a)));
+
+        let parens = expr
+            .clone()
+            .delimited_by(just(Token::Lpar), just(Token::Rpar));
+        let record_lit =
+            record(variable, expr.clone()).map(|v| Expr::Record(v.into_iter().collect()));
         let atom = parens
             .or(function)
             .or(constant)
             .or(record_lit)
             .or(block)
+            .or(if_)
             .or(variable.map(Expr::Variable));
 
         let make_times = make_bin!(Operator::Times);
@@ -104,11 +114,34 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             )
             .foldl(|l, (f, r)| f(l, r));
 
-        let expr = sum
+        let make_lt = make_bin!(Operator::LessThan);
+        let make_lte = make_bin!(Operator::LessThanEqual);
+        let make_gt = make_bin!(Operator::GreaterThan);
+        let make_gte = make_bin!(Operator::GreaterThanEqual);
+
+        let cmp = sum
             .clone()
-            .then(sum.repeated())
-            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)));
-        expr
+            .then(
+                just(Token::LessThan)
+                    .to(make_lt)
+                    .or(just(Token::LessThanEquals).to(make_lte))
+                    .or(just(Token::GreaterThan).to(make_gt))
+                    .or(just(Token::GreaterThanEquals).to(make_gte))
+                    .then(sum)
+                    .repeated(),
+            )
+            .foldl(|l, (f, r)| f(l, r));
+
+        let make_eqs = make_bin!(Operator::Equals);
+        let eqs = cmp
+            .clone()
+            .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
+            .foldl(|l, (f, r)| f(l, r));
+
+        eqs
+            .clone()
+            .then(eqs.repeated())
+            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)))
     })
     .then_ignore(end())
 }

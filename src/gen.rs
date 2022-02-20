@@ -150,7 +150,11 @@ fn gen_op(o: &Operator) -> Type {
     let num = Box::new(Type::Constructor(Constructor::Number));
     let boolean = Box::new(Type::Constructor(Constructor::Boolean));
     match o {
-        Operator::Equals => Type::Arrow(num.clone(), Box::new(Type::Arrow(num, boolean))),
+        Operator::GreaterThan
+        | Operator::GreaterThanEqual
+        | Operator::LessThan
+        | Operator::LessThanEqual
+        | Operator::Equals => Type::Arrow(num.clone(), Box::new(Type::Arrow(num, boolean))),
         Operator::Minus | Operator::Times | Operator::Plus => {
             Type::Arrow(num.clone(), Box::new(Type::Arrow(num.clone(), num)))
         }

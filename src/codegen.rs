@@ -1,3 +1,4 @@
+use super::expr::Operator;
 use super::lift::{self, locals, Expr, Program};
 use super::wasm::{self, Instruction, Type, Value, Wasm};
 use im::HashMap;
@@ -113,6 +114,43 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
                 Instruction::Wrap(Type::I32, Type::I64),
                 Instruction::If(emit_expr(*c), emit_expr(*a), Type::I64),
             ]);
+            is
+        }
+        Expr::BinaryPrimitive(o, l, r) => {
+            let mut is = Vec::new();
+            is.extend(emit_expr(*l));
+            is.extend(if o == Operator::Equals {
+                vec![]
+            } else {
+                vec![Instruction::Reinterpret(Type::F64, Type::I64)]
+            });
+            is.extend(emit_expr(*r));
+            is.extend(if o == Operator::Equals {
+                vec![]
+            } else {
+                vec![Instruction::Reinterpret(Type::F64, Type::I64)]
+            });
+            is.push(match o {
+                Operator::Plus => Instruction::Add(Type::F64),
+                Operator::Minus => Instruction::Sub(Type::F64),
+                Operator::Times => Instruction::Mul(Type::F64),
+                Operator::LessThan => Instruction::GreaterThanEqual(Type::F64),
+                Operator::LessThanEqual => Instruction::GreaterThan(Type::F64),
+                Operator::GreaterThan => Instruction::LessThanEqual(Type::F64),
+                Operator::GreaterThanEqual => Instruction::LessThan(Type::F64),
+                Operator::Equals => Instruction::Sub(Type::I64),
+            });
+            is.extend(if o == Operator::Equals {
+                vec![]
+            } else if o == Operator::LessThan
+                || o == Operator::LessThanEqual
+                || o == Operator::GreaterThan
+                || o == Operator::GreaterThanEqual
+            {
+                vec![Instruction::Extend(Type::I64, Type::I32)]
+            } else {
+                vec![Instruction::Reinterpret(Type::I64, Type::F64)]
+            });
             is
         }
         Expr::Ignore(_) => todo!(),

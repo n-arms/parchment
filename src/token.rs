@@ -36,6 +36,10 @@ pub enum Token {
     Minus,
     Times,
     DoubleEqs,
+    LessThan,
+    LessThanEquals,
+    GreaterThan,
+    GreaterThanEquals,
 }
 
 impl cmp::PartialEq for Token {
@@ -77,6 +81,10 @@ impl cmp::PartialEq for Token {
             Token::False => matches!(Token::False, other),
             Token::Match => matches!(Token::Match, other),
             Token::Semicolon => matches!(Token::Semicolon, other),
+            Token::LessThan => matches!(Token::LessThan, other),
+            Token::LessThanEquals => matches!(Token::LessThanEquals, other),
+            Token::GreaterThan => matches!(Token::GreaterThan, other),
+            Token::GreaterThanEquals => matches!(Token::GreaterThanEquals, other),
         }
     }
 }
@@ -108,6 +116,10 @@ impl std::hash::Hash for Token {
             Token::Minus => 21,
             Token::Times => 22,
             Token::DoubleEqs => 23,
+            Token::LessThan => 24,
+            Token::LessThanEquals => 25,
+            Token::GreaterThan => 26,
+            Token::GreaterThanEquals => 27,
         }])
     }
 }

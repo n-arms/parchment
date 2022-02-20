@@ -1,4 +1,4 @@
-use super::expr::{self, Pattern, Statement};
+use super::expr::{self, Operator, Pattern, Statement};
 use super::types::VarSet;
 use im::HashSet;
 
@@ -30,6 +30,8 @@ pub enum Expr {
     Record(Vec<Expr>),
     /// look up the nth value in the record produced by evaluating e
     RecordLookup(Box<Expr>, usize),
+    /// call the primative operator b with the two expressions
+    BinaryPrimitive(Operator, Box<Expr>, Box<Expr>),
 }
 
 #[derive(Clone, Debug)]
@@ -132,6 +134,15 @@ pub fn lift(
             Ok(body)
         }
         expr::Expr::Application(e1, e2) => {
+            if let expr::Expr::Application(o, e1) = e1.as_ref() {
+                if let expr::Expr::Operator(o) = o.as_ref() {
+                    let mut p1 = lift(e1, current_env, v, fun)?;
+                    let Program { defs, main } = lift(e2, current_env, v, fun)?;
+                    p1.defs.extend(defs);
+                    p1.main = Expr::BinaryPrimitive(*o, Box::new(p1.main), Box::new(main));
+                    return Ok(p1);
+                }
+            }
             let mut p1 = lift(e1, current_env, v, fun)?;
             let Program { defs, main } = lift(e2, current_env, v, fun)?;
 
@@ -215,7 +226,33 @@ pub fn lift(
                 main: Expr::All(exprs),
             })
         }
-        expr::Expr::Operator(o) => todo!(),
+        expr::Expr::Operator(o) => {
+            let id1 = fun.fresh();
+            let id2 = fun.fresh();
+
+            let f1 = FunctionDef {
+                arg: String::from("b"),
+                body: Expr::BinaryPrimitive(
+                    *o,
+                    Box::new(Expr::EnvLookup(0)),
+                    Box::new(Expr::Variable(String::from("b"))),
+                ),
+                env: vec![String::from("a")],
+                locals: HashSet::new(),
+            };
+
+            let f2 = FunctionDef {
+                arg: String::from("a"),
+                body: Expr::Closure(id1, vec![Expr::Variable(String::from("a"))]),
+                env: Vec::new(),
+                locals: HashSet::new(),
+            };
+
+            Ok(Program {
+                defs: vec![f1, f2],
+                main: Expr::Closure(id2, Vec::new()),
+            })
+        }
         expr::Expr::Match(_, _) => todo!(),
     }
 }
@@ -234,5 +271,6 @@ pub fn locals(e: &self::Expr) -> HashSet<String> {
         Expr::Ignore(e) => locals(e),
         Expr::Assign(v, e) => locals(e).update(v.clone()),
         Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),
+        Expr::BinaryPrimitive(_, e1, e2) => locals(e1).union(locals(e2)),
     }
 }
