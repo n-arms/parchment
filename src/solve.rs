@@ -35,7 +35,6 @@ fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constra
                     .iter()
                     .map(active_type_vars)
                     .fold(HashSet::new(), HashSet::union);
-                println!("active vars in constraints: {:?}", cs_active);
                 let is_solvable = sup
                     .free_type_vars()
                     .relative_complement(m.clone())

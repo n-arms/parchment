@@ -10,10 +10,12 @@ mod token;
 mod types;
 mod wasm;
 
+use chumsky::prelude::*;
 use codegen::emit_program;
 use gen::generate;
 use im::HashSet;
 use lift::lift;
+use parser::parse;
 use solve::solve;
 use std::fs::write;
 use std::io::{self, BufRead, Write};
@@ -22,27 +24,8 @@ use std::process::Command;
 use types::{Apply, Type, TypeVarSet, VarSet};
 use wasm::WATFormatter;
 
-fn read_input() -> String {
-    let mut parens = 0isize;
-    let mut braces = 0isize;
-    let mut out = String::new();
-    for line in io::stdin().lock().lines() {
-        let l = line.unwrap();
-        parens += l.chars().filter(|c| *c == '(').count() as isize;
-        parens -= l.chars().filter(|c| *c == ')').count() as isize;
-        braces += l.chars().filter(|c| *c == '{').count() as isize;
-        braces -= l.chars().filter(|c| *c == '}').count() as isize;
-        out.push_str(&l);
-
-        if parens == 0 && braces == 0 {
-            return out;
-        }
-    }
-    unreachable!()
-}
-
 fn process(s: String) {
-    let ast = parser::parse_expr(&lexer::scan(&s)).unwrap().unwrap().0;
+    let ast = parse(&lexer::scan(&s)).unwrap();
 
     let p = lift(&ast, &[], &VarSet::default(), &VarSet::default());
 
@@ -55,31 +38,15 @@ fn process(s: String) {
     let res = eval_wasm(&emit_program(p.unwrap()));
     let res_fmt = match t {
         Type::Arrow(_, _) => String::from("<function>"),
-        Type::Constructor(types::Constructor::Boolean) => String::from(if res == 0 {"true"} else {"false"}),
+        Type::Constructor(types::Constructor::Boolean) => {
+            String::from(if res == 0 { "true" } else { "false" })
+        }
         Type::Constructor(types::Constructor::Number) => reinterpret_as_f64(res).to_string(),
         Type::Constructor(types::Constructor::Unit) => String::from("()"),
         Type::Record(_) => String::from("<record>"),
-        Type::Variable(_) => unreachable!()
+        Type::Variable(_) => unreachable!(),
     };
-    println!(
-        "= {}",
-        res_fmt
-    );
-}
-
-fn repl<F: Fn(String) + RefUnwindSafe>(f: F) {
-    loop {
-        println!("====");
-        io::stdout().flush().unwrap();
-        let text = read_input();
-        if text == "quit" {
-            return;
-        }
-        #[allow(unused_must_use)]
-        {
-            catch_unwind(|| f(text));
-        }
-    }
+    println!("= {}", res_fmt);
 }
 
 fn eval_wasm(w: &wasm::Wasm) -> i64 {
@@ -100,7 +67,7 @@ fn reinterpret_as_f64(bytes: i64) -> f64 {
 }
 
 fn type_debug(text: String) {
-    let ast = parser::parse_expr(&lexer::scan(&text)).unwrap().unwrap().0;
+    let ast = parse(&lexer::scan(&text)).unwrap();
     let tvs = TypeVarSet::default();
     let (a, c, t) = generate(&ast, &tvs, HashSet::new()).unwrap();
     println!("assumptions:");
@@ -111,12 +78,45 @@ fn type_debug(text: String) {
     for constr in &c {
         println!("\t{}", constr);
     }
-    assert!(a.is_empty());
+
     let s = solve(c.clone().into_iter().collect(), &tvs).unwrap();
     println!("{}\n:: {}", ast, t.apply(s));
+}
 
+fn read_input() -> String {
+    let mut parens = 0isize;
+    let mut braces = 0isize;
+    let mut out = String::new();
+    for line in io::stdin().lock().lines() {
+        let l = line.unwrap();
+        parens += l.chars().filter(|c| *c == '(').count() as isize;
+        parens -= l.chars().filter(|c| *c == ')').count() as isize;
+        braces += l.chars().filter(|c| *c == '{').count() as isize;
+        braces -= l.chars().filter(|c| *c == '}').count() as isize;
+        out.push_str(&l);
+
+        if parens == 0 && braces == 0 {
+            return out;
+        }
+    }
+    unreachable!()
+}
+
+fn repl<F: Fn(String) + RefUnwindSafe>(f: F) {
+    loop {
+        println!("====");
+        io::stdout().flush().unwrap();
+        let text = read_input();
+        if text == "quit" {
+            return;
+        }
+        #[allow(unused_must_use)]
+        {
+            catch_unwind(|| f(text));
+        }
+    }
 }
 
 fn main() {
-    repl(type_debug);
+    repl(process);
 }

@@ -48,11 +48,20 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     Application(Box<Expr<V>>, Box<Expr<V>>),
     Number(f64),
     Boolean(bool),
+    Operator(Operator),
     Variable(V),
     Record(HashMap<String, Expr<V>>),
     If(Box<Expr<V>>, Box<Expr<V>>, Box<Expr<V>>),
     Match(Box<Expr<V>>, Vec<(Pattern<V>, Expr<V>)>),
     Block(Vec<Statement<V>>),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Operator {
+    Plus,
+    Minus,
+    Times,
+    Equals,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -64,6 +73,13 @@ pub enum Statement<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
 impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<V> {
     fn eq(&self, other: &Expr<V>) -> bool {
         match self {
+            Expr::Operator(o1) => {
+                if let Expr::Operator(o2) = other {
+                    o1 == o2
+                } else {
+                    false
+                }
+            }
             Expr::Function(p, e) => {
                 if let Expr::Function(p1, e1) = other {
                     p == p1 && e == e1
@@ -173,12 +189,12 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
             if matches!(l.as_ref(), Expr::Function(..)) {
                 format!("({})", show_expr(margin, l))
             } else {
-                show_expr(margin, l)
+                format!("({})", show_expr(margin, l))
             },
             if matches!(r.as_ref(), Expr::Application(..)) {
                 format!("({})", show_expr(margin, r))
             } else {
-                show_expr(margin, r)
+                format!("({})", show_expr(margin, r))
             }
         ),
         Expr::Number(n) => n.to_string(),
@@ -229,6 +245,10 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
                 acc
             })
         ),
+        Expr::Operator(Operator::Equals) => format!("=="),
+        Expr::Operator(Operator::Times) => format!("*"),
+        Expr::Operator(Operator::Plus) => format!("+"),
+        Expr::Operator(Operator::Minus) => format!("-"),
         e => format!("fn {}", show_tailing_fn(margin, e)),
     }
 }

@@ -106,8 +106,16 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             ]);
             is
         }
+        Expr::If(p, c, a) => {
+            let mut is = Vec::new();
+            is.extend(emit_expr(*p));
+            is.extend([
+                Instruction::Wrap(Type::I32, Type::I64),
+                Instruction::If(emit_expr(*c), emit_expr(*a), Type::I64),
+            ]);
+            is
+        }
         Expr::Ignore(_) => todo!(),
-        Expr::If(_, _, _) => todo!(),
     }
 }
 

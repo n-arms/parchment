@@ -32,11 +32,19 @@ pub enum Token {
     False,
     Match,
     Semicolon,
+    Plus,
+    Minus,
+    Times,
+    DoubleEqs,
 }
 
 impl cmp::PartialEq for Token {
     fn eq(&self, other: &Token) -> bool {
         match self {
+            Token::Plus => matches!(Token::Plus, other),
+            Token::Minus => matches!(Token::Minus, other),
+            Token::Times => matches!(Token::Times, other),
+            Token::DoubleEqs => matches!(Token::DoubleEqs, other),
             Token::Lpar => matches!(Token::Lpar, other),
             Token::Rpar => matches!(Token::Rpar, other),
             Token::Fn => matches!(Token::Fn, other),
@@ -72,3 +80,36 @@ impl cmp::PartialEq for Token {
         }
     }
 }
+
+impl std::hash::Hash for Token {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write(&[match self {
+            Token::Lpar => 0,
+            Token::Rpar => 1,
+            Token::Identifier(_) => 2,
+            Token::Fn => 3,
+            Token::Rarrow => 4,
+            Token::Number(_) => 5,
+            Token::Let => 6,
+            Token::Eqs => 7,
+            Token::In => 8,
+            Token::LBrace => 9,
+            Token::RBrace => 10,
+            Token::Colon => 11,
+            Token::Comma => 12,
+            Token::If => 13,
+            Token::Then => 14,
+            Token::Else => 15,
+            Token::True => 16,
+            Token::False => 17,
+            Token::Match => 18,
+            Token::Semicolon => 19,
+            Token::Plus => 20,
+            Token::Minus => 21,
+            Token::Times => 22,
+            Token::DoubleEqs => 23,
+        }])
+    }
+}
+
+impl cmp::Eq for Token {}

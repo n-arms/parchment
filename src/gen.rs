@@ -141,7 +141,19 @@ pub fn generate(
 
             Ok((a, cs, Type::Record(ts)))
         }
+        Expr::Operator(o) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
         Expr::Match(_, _) => todo!(),
+    }
+}
+
+fn gen_op(o: &Operator) -> Type {
+    let num = Box::new(Type::Constructor(Constructor::Number));
+    let boolean = Box::new(Type::Constructor(Constructor::Boolean));
+    match o {
+        Operator::Equals => Type::Arrow(num.clone(), Box::new(Type::Arrow(num, boolean))),
+        Operator::Minus | Operator::Times | Operator::Plus => {
+            Type::Arrow(num.clone(), Box::new(Type::Arrow(num.clone(), num)))
+        }
     }
 }
 
@@ -154,7 +166,8 @@ pub fn gen_block(
         match fst {
             Statement::Let(p, body) => {
                 let (bindings, tp) = p.type_pattern(t);
-                let (a1, c1, t1) = generate(body, t, m.clone())?;
+                let (mut a1, c1, t1) = generate(body, t, m.clone())?;
+                a1.retain(|(var, _)| !bindings.contains_key(var));
                 let (mut a2, c2, t2) = gen_block(&b[1..], t, m.clone())?;
 
                 let mut c3: Vec<_> = a2

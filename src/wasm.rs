@@ -80,6 +80,9 @@ pub enum Instruction {
     CallIndirect(String),
     /// load a constant value onto the stack
     Const(Value),
+    /// pop a value off the stack, if it is true evaluate the first expression, if it is false
+    /// evaluate the second. Both expressions should produce expressions of type t
+    If(Vec<Instruction>, Vec<Instruction>, Type),
 }
 
 #[derive(Clone, Debug)]
@@ -213,6 +216,26 @@ impl Instruction {
             Instruction::Wrap(new, old) => w.line(format!("{}.wrap_{}", new, old)),
             Instruction::Extend(new, old) => w.line(format!("{}.extend_{}_u", new, old)),
             Instruction::CallIndirect(t) => w.line(format!("call_indirect (type ${})", t)),
+            Instruction::If(i1, i2, res) => {
+                w.line(format!("(if (result {})", res));
+                w.inc();
+                w.line("(then");
+                w.inc();
+                for i in i1 {
+                    i.format(w);
+                }
+                w.dec();
+                w.line(")");
+                w.line("(else");
+                w.inc();
+                for i in i2 {
+                    i.format(w);
+                }
+                w.dec();
+                w.line(")");
+                w.dec();
+                w.line(")");
+            }
         }
     }
 }

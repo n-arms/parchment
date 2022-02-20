@@ -27,6 +27,18 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::Rarrow);
                 text = &text[2..];
             }
+            '-' => {
+                out.push(Token::Minus);
+                text = &text[1..];
+            }
+            '*' => {
+                out.push(Token::Times);
+                text = &text[1..];
+            }
+            '+' => {
+                out.push(Token::Plus);
+                text = &text[1..];
+            }
             'f' if text.len() > 2 && text[1] == 'n' && text[2] == ' ' => {
                 out.push(Token::Fn);
                 text = &text[3..];
@@ -82,6 +94,10 @@ pub fn scan(prog: &str) -> Vec<Token> {
             'i' if text.len() > 3 && text[1] == 'n' && text[2] == ' ' => {
                 out.push(Token::In);
                 text = &text[3..];
+            }
+            '=' if text.len() > 2 && text[1] == '=' => {
+                out.push(Token::DoubleEqs);
+                text = &text[2..];
             }
             '=' => {
                 out.push(Token::Eqs);

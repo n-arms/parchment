@@ -50,7 +50,7 @@ fn free(e: &expr::Expr<String>) -> HashSet<String> {
     match e {
         expr::Expr::Function(p, b) => free(b).relative_complement(p.bound_vars()),
         expr::Expr::Application(e1, e2) => free(e1).union(free(e2)),
-        expr::Expr::Number(_) | expr::Expr::Boolean(_) => HashSet::new(),
+        expr::Expr::Operator(_) | expr::Expr::Number(_) | expr::Expr::Boolean(_) => HashSet::new(),
         expr::Expr::Variable(v) => HashSet::unit(v.clone()),
         expr::Expr::Record(r) => r.values().flat_map(free).collect(),
         expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
@@ -215,6 +215,7 @@ pub fn lift(
                 main: Expr::All(exprs),
             })
         }
+        expr::Expr::Operator(o) => todo!(),
         expr::Expr::Match(_, _) => todo!(),
     }
 }
