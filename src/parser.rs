@@ -24,9 +24,7 @@ fn record<L, R>(
     lhs: impl Parser<Token, L, Error = Simple<Token>> + Clone,
     rhs: impl Parser<Token, R, Error = Simple<Token>> + Clone,
 ) -> impl Parser<Token, Vec<(L, R)>, Error = Simple<Token>> + Clone {
-    let pair = lhs
-        .then_ignore(just(Token::Colon))
-        .then(rhs);
+    let pair = lhs.then_ignore(just(Token::Colon)).then(rhs);
 
     let field_list = pair
         .clone()
@@ -138,8 +136,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
             .foldl(|l, (f, r)| f(l, r));
 
-        eqs
-            .clone()
+        eqs.clone()
             .then(eqs.repeated())
             .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)))
     })

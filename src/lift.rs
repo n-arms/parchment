@@ -14,10 +14,8 @@ pub enum Expr {
     Number(f64),
     Boolean(bool),
     If(Box<Expr>, Box<Expr>, Box<Expr>),
-    /// a closure containing the function pointer and the set of values to be put into an env
-    Closure(usize, Vec<Expr>),
-    /// look up a variable from an env
-    EnvLookup(usize),
+    /// a closure containing the function pointer and the env
+    Closure(usize, Box<Expr>),
     /// evaluate all the expressions
     All(Vec<Expr>),
     /// ignore the result of an expression
@@ -32,6 +30,10 @@ pub enum Expr {
     RecordLookup(Box<Expr>, usize),
     /// call the primative operator b with the two expressions
     BinaryPrimitive(Operator, Box<Expr>, Box<Expr>),
+}
+
+pub fn get_env() -> Expr {
+    Expr::Variable(String::from("env"))
 }
 
 #[derive(Clone, Debug)]
@@ -94,44 +96,12 @@ pub fn lift(
 ) -> Result<Program, ()> {
     match e {
         expr::Expr::Function(p, b) => {
-            let f_id = fun.fresh();
-            let mut env: Vec<_> = free(b)
-                .relative_complement(p.bound_vars())
-                .into_iter()
-                .collect();
-            env.sort();
-
-            let mut body = lift(b, &env, v, fun)?;
-
-            let arg = v.fresh();
-
-            let mut lookup = to_lookup(p, Expr::Variable(arg.clone()));
-            lookup.push(body.main);
-
-            let full_body = Expr::All(lookup);
-            let locals = locals(&full_body);
-
-            body.defs.insert(
-                0,
-                FunctionDef {
-                    arg,
-                    body: full_body,
-                    env: env.clone(),
-                    locals,
-                },
-            );
-            let new_env = env
-                .into_iter()
-                .map(|name| {
-                    if let Ok(i) = current_env.binary_search(&name) {
-                        Expr::EnvLookup(i)
-                    } else {
-                        Expr::Variable(name)
-                    }
-                })
-                .collect();
-            body.main = Expr::Closure(f_id, new_env);
-            Ok(body)
+            let (defs, ptr, env) = lift_function(p, b, None, current_env, v, fun)?;
+            
+            Ok(Program {
+                defs,
+                main: Expr::Closure(ptr, Box::new(Expr::Record(env)))
+            })
         }
         expr::Expr::Application(e1, e2) => {
             if let expr::Expr::Application(o, e1) = e1.as_ref() {
@@ -162,7 +132,7 @@ pub fn lift(
             if let Ok(i) = current_env.binary_search(v) {
                 Ok(Program {
                     defs: Vec::new(),
-                    main: Expr::EnvLookup(i),
+                    main: Expr::RecordLookup(Box::new(get_env()), i)
                 })
             } else {
                 Ok(Program {
@@ -202,6 +172,12 @@ pub fn lift(
             let mut exprs = Vec::new();
             for (i, stmt) in b.iter().enumerate() {
                 match stmt {
+                    // this is the only form of recursive let statements that we support
+                    Statement::Let(Pattern::Variable(var), expr::Expr::Function(p, b)) => {
+                        let (ds, ptr, env) = lift_function(p, b, Some(var.clone()), current_env, v, fun)?;
+                        exprs.push(Expr::Assign(var.clone(), Box::new(Expr::Closure(ptr, Box::new(Expr::Record(env))))));
+                        defs.extend(ds);
+                    }
                     Statement::Let(p, b) => {
                         let temp = v.fresh();
                         let lookup = to_lookup(p, Expr::Variable(temp.clone()));
@@ -234,7 +210,7 @@ pub fn lift(
                 arg: String::from("b"),
                 body: Expr::BinaryPrimitive(
                     *o,
-                    Box::new(Expr::EnvLookup(0)),
+                    Box::new(Expr::RecordLookup(Box::new(get_env()), 0)),
                     Box::new(Expr::Variable(String::from("b"))),
                 ),
                 env: vec![String::from("a")],
@@ -243,18 +219,67 @@ pub fn lift(
 
             let f2 = FunctionDef {
                 arg: String::from("a"),
-                body: Expr::Closure(id1, vec![Expr::Variable(String::from("a"))]),
+                body: Expr::Closure(id1, Box::new(Expr::Record(vec![Expr::Variable(String::from("a"))]))),
                 env: Vec::new(),
                 locals: HashSet::new(),
             };
 
             Ok(Program {
                 defs: vec![f1, f2],
-                main: Expr::Closure(id2, Vec::new()),
+                main: Expr::Closure(id2, Box::new(Expr::Record(Vec::new()))),
             })
         }
         expr::Expr::Match(_, _) => todo!(),
     }
+}
+
+fn lift_function(
+    p: &Pattern<String>,
+    b: &expr::Expr<String>,
+    recuring_on: Option<String>,
+    current_env: &[String],
+    v: &VarSet<String>,
+    fun: &FunSet,
+) -> Result<(Vec<FunctionDef>, usize, Vec<Expr>), ()> {
+    let f_id = fun.fresh();
+    let mut env: Vec<_> = free(b)
+        .relative_complement(p.bound_vars())
+        .into_iter()
+        .collect();
+    env.sort();
+
+    let mut body = lift(b, &env, v, fun)?;
+
+    let arg = v.fresh();
+
+    let mut lookup = to_lookup(p, Expr::Variable(arg.clone()));
+    lookup.push(body.main);
+
+    let full_body = Expr::All(lookup);
+    let locals = locals(&full_body);
+
+    body.defs.insert(
+        0,
+        FunctionDef {
+            arg,
+            body: full_body,
+            env: env.clone(),
+            locals,
+        },
+    );
+    let new_env = env
+        .into_iter()
+        .map(|name| {
+            if Some(&name) == recuring_on.as_ref() {
+                Expr::Closure(f_id, Box::new(Expr::Variable(String::from("working_env"))))
+            } else if let Ok(i) = current_env.binary_search(&name) {
+                Expr::RecordLookup(Box::new(get_env()), i)
+            } else {
+                Expr::Variable(name)
+            }
+        })
+        .collect();
+    Ok((body.defs, f_id, new_env))
 }
 
 pub fn locals(e: &self::Expr) -> HashSet<String> {
@@ -262,13 +287,12 @@ pub fn locals(e: &self::Expr) -> HashSet<String> {
         Expr::Variable(_)
         | Expr::Number(_)
         | Expr::Boolean(_)
-        | Expr::RecordLookup(_, _)
-        | Expr::EnvLookup(_) => HashSet::new(),
+        | Expr::RecordLookup(_, _) => HashSet::new(),
         Expr::Application(e1, e2) => locals(e1).union(locals(e2)),
-        Expr::All(es) | Expr::Record(es) | Expr::Closure(_, es) => {
+        Expr::All(es) | Expr::Record(es) => {
             es.iter().flat_map(locals).collect()
         }
-        Expr::Ignore(e) => locals(e),
+        Expr::Ignore(e) | Expr::Closure(_, e) => locals(e),
         Expr::Assign(v, e) => locals(e).update(v.clone()),
         Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),
         Expr::BinaryPrimitive(_, e1, e2) => locals(e1).union(locals(e2)),

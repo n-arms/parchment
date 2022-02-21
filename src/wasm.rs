@@ -63,6 +63,9 @@ pub enum Instruction {
     /// pop two values of type t off the stack, check if the first is greater than or equal to the other, push the
     /// result onto the stack
     GreaterThanEqual(Type),
+    /// pop two values of type t off the stack, check if they are equal, push the result onto the
+    /// stack
+    Equal(Type),
     /// pop two values of type t off the stack, and them, push the result onto the stack
     Or(Type),
     /// pop two values of type t off the stack, or them, push the result onto the stack
@@ -255,6 +258,7 @@ impl Instruction {
             Instruction::LessThanEqual(t) => w.line(format!("{}.le", t)),
             Instruction::GreaterThan(t) => w.line(format!("{}.gt", t)),
             Instruction::GreaterThanEqual(t) => w.line(format!("{}.ge", t)),
+            Instruction::Equal(t) => w.line(format!("{}.eq", t)),
         }
     }
 }

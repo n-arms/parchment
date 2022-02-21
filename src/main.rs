@@ -10,7 +10,6 @@ mod token;
 mod types;
 mod wasm;
 
-use chumsky::prelude::*;
 use codegen::emit_program;
 use gen::generate;
 use im::HashSet;
@@ -39,7 +38,7 @@ fn process(s: String) {
     let res_fmt = match t {
         Type::Arrow(_, _) => String::from("<function>"),
         Type::Constructor(types::Constructor::Boolean) => {
-            String::from(if res == 0 { "true" } else { "false" })
+            String::from(if res == 1 { "true" } else { "false" })
         }
         Type::Constructor(types::Constructor::Number) => reinterpret_as_f64(res).to_string(),
         Type::Constructor(types::Constructor::Unit) => String::from("()"),

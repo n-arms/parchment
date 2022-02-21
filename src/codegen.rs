@@ -21,6 +21,7 @@ pub fn emit_program(p: Program) -> Wasm {
     main_locals.extend([
         (String::from("g64"), Type::I64),
         (String::from("g32"), Type::I32),
+        (String::from("working_env"), Type::I32),
     ]);
     defs.push(wasm::FunctionDef {
         args: Vec::new(),
@@ -50,6 +51,7 @@ pub fn emit_function(f: lift::FunctionDef) -> wasm::FunctionDef {
     locals.extend([
         (String::from("g64"), Type::I64),
         (String::from("g32"), Type::I32),
+        (String::from("working_env"), Type::I32),
     ]);
     wasm::FunctionDef {
         args: vec![(f.arg, Type::I64), (String::from("env"), Type::I32)],
@@ -69,25 +71,22 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             is.extend(call_closure());
             is
         }
-        Expr::Variable(v) => vec![Instruction::GetLocal(v)],
+        Expr::Variable(v) => if &v == "env" {
+            vec![Instruction::GetLocal(v), Instruction::Extend(Type::I64, Type::I32)]
+        } else {
+            vec![Instruction::GetLocal(v)]
+        },
         Expr::Number(n) => vec![
             Instruction::Const(Value::F64(n)),
             Instruction::Reinterpret(Type::I64, Type::F64),
         ],
         Expr::Boolean(b) => vec![Instruction::Const(Value::I64(if b { 1 } else { 0 }))],
-        Expr::Closure(func, env) => {
-            if env.is_empty() {
-                make_function(func)
-            } else {
+        Expr::Closure(func, env) => match *env {
+            Expr::Record(env) if env.is_empty() => 
+                make_function(func),
+            env =>
                 make_closure(func, env)
-            }
         }
-        Expr::EnvLookup(i) => vec![
-            Instruction::GetLocal(String::from("env")),
-            Instruction::Const(Value::I32(i as i32 * 8)),
-            Instruction::Add(Type::I32),
-            Instruction::Load(Type::I64),
-        ],
         Expr::All(es) => es.into_iter().flat_map(emit_expr).collect(),
         Expr::Assign(v, e) => {
             let mut is = Vec::new();
@@ -138,19 +137,20 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
                 Operator::LessThanEqual => Instruction::GreaterThan(Type::F64),
                 Operator::GreaterThan => Instruction::LessThanEqual(Type::F64),
                 Operator::GreaterThanEqual => Instruction::LessThan(Type::F64),
-                Operator::Equals => Instruction::Sub(Type::I64),
+                Operator::Equals => Instruction::Equal(Type::I64),
             });
-            is.extend(if o == Operator::Equals {
-                vec![]
-            } else if o == Operator::LessThan
-                || o == Operator::LessThanEqual
-                || o == Operator::GreaterThan
-                || o == Operator::GreaterThanEqual
-            {
-                vec![Instruction::Extend(Type::I64, Type::I32)]
-            } else {
-                vec![Instruction::Reinterpret(Type::I64, Type::F64)]
-            });
+            is.extend(
+                if o == Operator::LessThan
+                    || o == Operator::LessThanEqual
+                    || o == Operator::GreaterThan
+                    || o == Operator::GreaterThanEqual
+                    || o == Operator::Equals
+                {
+                    vec![Instruction::Extend(Type::I64, Type::I32)]
+                } else {
+                    vec![Instruction::Reinterpret(Type::I64, Type::F64)]
+                },
+            );
             is
         }
         Expr::Ignore(_) => todo!(),
@@ -172,6 +172,7 @@ fn malloc(bytes: usize) -> Vec<Instruction> {
 fn allocate_all(es: Vec<Expr>) -> Vec<Instruction> {
     let mut is = Vec::new();
     is.extend(malloc(es.len() * 8));
+    is.push(Instruction::TeeLocal(String::from("working_env")));
     for (i, e) in es.into_iter().enumerate() {
         is.extend(duplicate(Type::I32));
         is.extend([
@@ -184,11 +185,15 @@ fn allocate_all(es: Vec<Expr>) -> Vec<Instruction> {
     is
 }
 
-fn make_closure(func: usize, env: Vec<Expr>) -> Vec<Instruction> {
+fn make_closure(func: usize, env: Expr) -> Vec<Instruction> {
     let mut is = Vec::new();
-    is.extend(allocate_all(env));
+    if let Expr::Record(r) = env {
+        is.extend(allocate_all(r));
+    } else {
+        is.extend(emit_expr(env));
+    }
+    is.push(Instruction::Extend(Type::I64, Type::I32));
     is.extend([
-        Instruction::Extend(Type::I64, Type::I32),
         Instruction::Const(Value::I64((func as i64) << 32)),
         Instruction::Or(Type::I64),
     ]);
