@@ -100,6 +100,7 @@ pub enum Instruction {
     /// pop a value off the stack, if it is true evaluate the first expression, if it is false
     /// evaluate the second. Both expressions should produce expressions of type t
     If(Vec<Instruction>, Vec<Instruction>, Type),
+    Drop
 }
 
 #[derive(Clone, Debug)]
@@ -259,6 +260,7 @@ impl Instruction {
             Instruction::GreaterThan(t) => w.line(format!("{}.gt", t)),
             Instruction::GreaterThanEqual(t) => w.line(format!("{}.ge", t)),
             Instruction::Equal(t) => w.line(format!("{}.eq", t)),
+            Instruction::Drop => w.line(String::from("drop"))
         }
     }
 }

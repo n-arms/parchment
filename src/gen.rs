@@ -37,6 +37,7 @@ pub enum TypeError {
     ConstructorMismatch(Constructor, Constructor),
     MissingField(String),
     NoSolvableConstraints,
+    TypeMismatch(Type, Type)
 }
 
 pub type Result<A> = std::result::Result<A, TypeError>;

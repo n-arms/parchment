@@ -93,7 +93,7 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
             }
             Ok(s)
         }
-        (l, r) => todo!("({}, {})", l, r),
+        (l, r) => Err(TypeError::TypeMismatch(l.clone(), r.clone()))
     }
 }
 

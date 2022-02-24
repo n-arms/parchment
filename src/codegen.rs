@@ -156,7 +156,12 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             );
             is
         }
-        Expr::Ignore(_) => todo!(),
+        Expr::Ignore(e) => {
+            let mut is = Vec::new();
+            is.extend(emit_expr(*e));
+            is.push(Instruction::Drop);
+            is
+        },
     }
 }
 

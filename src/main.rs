@@ -187,6 +187,7 @@ fn main() -> io::Result<()> {
             .filter(|c| !c.is_whitespace() && *c != ' ')
             .map(|c| c.to_ascii_lowercase())
             .collect();
+        
         match &stripped[..] {
             "+typedebug" => state.type_debug = true,
             "-typedebug" => state.type_debug = false,
