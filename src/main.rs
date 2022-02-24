@@ -17,105 +17,188 @@ use lift::lift;
 use parser::parse;
 use solve::solve;
 use std::fs::write;
-use std::io::{self, BufRead, Write};
-use std::panic::{catch_unwind, RefUnwindSafe};
-use std::process::Command;
-use types::{Apply, Type, TypeVarSet, VarSet};
+use std::io::{self, BufRead};
+use std::process::{Command, Output};
+use types::{Apply, Constructor, Type, VarSet};
 use wasm::WATFormatter;
 
-fn process(s: String) {
-    let ast = parse(&lexer::scan(&s)).unwrap();
-
-    let p = lift(&ast, &[], &VarSet::default(), &VarSet::default());
-
-    let tvs = TypeVarSet::default();
-    let (a, c, t) = generate(&ast, &tvs, HashSet::new()).unwrap();
-    assert!(a.is_empty());
-    let s = solve(c.into_iter().collect(), &tvs).unwrap();
-    let t = t.apply(s);
-    println!("::{}", t);
-    let res = eval_wasm(&emit_program(p.unwrap()));
-    let res_fmt = match t {
-        Type::Arrow(_, _) => String::from("<function>"),
-        Type::Constructor(types::Constructor::Boolean) => {
-            String::from(if res == 1 { "true" } else { "false" })
-        }
-        Type::Constructor(types::Constructor::Number) => reinterpret_as_f64(res).to_string(),
-        Type::Constructor(types::Constructor::Unit) => String::from("()"),
-        Type::Record(_) => String::from("<record>"),
-        Type::Variable(_) => unreachable!(),
-    };
-    println!("= {}", res_fmt);
-}
-
-fn eval_wasm(w: &wasm::Wasm) -> i64 {
-    let mut f = WATFormatter::default();
-    w.format(&mut f);
-    write("temp.wat", f.to_string()).unwrap();
-    Command::new("wat2wasm").arg("temp.wat").output().unwrap();
-    let out = Command::new("node")
-        .arg("runwasm.js")
-        .output()
-        .unwrap()
-        .stdout;
-    String::from_utf8_lossy(&out).parse().unwrap()
-}
-
-fn reinterpret_as_f64(bytes: i64) -> f64 {
-    f64::from_ne_bytes(bytes.to_ne_bytes())
-}
-
-fn type_debug(text: String) {
-    let ast = parse(&lexer::scan(&text)).unwrap();
-    let tvs = TypeVarSet::default();
-    let (a, c, t) = generate(&ast, &tvs, HashSet::new()).unwrap();
-    println!("assumptions:");
-    for (var, t) in &a {
-        println!("\t{} :: {}", var, t);
-    }
-    println!("\nconstraints:");
-    for constr in &c {
-        println!("\t{}", constr);
-    }
-
-    let s = solve(c.into_iter().collect(), &tvs).unwrap();
-    println!("{}\n:: {}", ast, t.apply(s));
-}
-
-fn read_input() -> String {
-    let mut parens = 0isize;
-    let mut braces = 0isize;
+fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
     let mut out = String::new();
-    for line in io::stdin().lock().lines() {
-        let l = line.unwrap();
-        parens += l.chars().filter(|c| *c == '(').count() as isize;
-        parens -= l.chars().filter(|c| *c == ')').count() as isize;
-        braces += l.chars().filter(|c| *c == '{').count() as isize;
-        braces -= l.chars().filter(|c| *c == '}').count() as isize;
-        out.push_str(&l);
-
-        if parens == 0 && braces == 0 {
+    let mut parens = 0;
+    let mut braces = 0;
+    for line in vec![first].into_iter().chain(lines) {
+        parens += line.chars().filter(|c| *c == '(').count() as isize;
+        parens -= line.chars().filter(|c| *c == ')').count() as isize;
+        braces += line.chars().filter(|c| *c == '{').count() as isize;
+        braces -= line.chars().filter(|c| *c == '}').count() as isize;
+        out.push_str(&line);
+        if braces == 0 && parens == 0 {
             return out;
         }
     }
     unreachable!()
 }
 
-fn repl<F: Fn(String) + RefUnwindSafe>(f: F) {
-    loop {
-        println!("====");
-        io::stdout().flush().unwrap();
-        let text = read_input();
-        if text == "quit" {
-            return;
-        }
-        #[allow(unused_must_use)]
-        {
-            catch_unwind(|| f(text));
-        }
-    }
+pub struct ReplState {
+    type_debug: bool,
+    eval: bool,
 }
 
-fn main() {
-    repl(process);
+fn process_text(lines: String, state: &ReplState) {
+    let ast = match parse(&lexer::scan(&lines)) {
+        Ok(a) => a,
+        Err(es) => {
+            for e in es {
+                println!("{:?}", e);
+            }
+            return;
+        }
+    };
+
+    let tvs = VarSet::default();
+    let (a, c, t) = match generate(&ast, &tvs, HashSet::new()) {
+        Ok(s) => s,
+        Err(e) => {
+            println!("{:?}", e);
+            return;
+        }
+    };
+    if !a.is_empty() {
+        println!("non empty assumption set:");
+        for (v, t) in a {
+            println!("{} : {}", v, t);
+        }
+        return;
+    }
+
+    let s = match solve(c.iter().cloned().collect(), &tvs) {
+        Ok(cs) => cs,
+        Err(e) => {
+            println!("{:?}", e);
+            return;
+        }
+    };
+
+    if state.type_debug {
+        println!("constraints");
+        for cons in c {
+            println!("\t{}", cons);
+        }
+        println!("\nbase type\n\t{}", t);
+        println!("\nsubstitutions");
+        for (tv, t) in &s {
+            println!("\t{} => {}", tv, t);
+        }
+        println!();
+    }
+
+    let final_type = t.apply(s);
+    println!(":: {}", final_type);
+
+    if !state.eval {
+        return;
+    }
+
+    let lifted = match lift(&ast, &[], &VarSet::default(), &VarSet::default()) {
+        Ok(l) => l,
+        Err(()) => return,
+    };
+
+    let wasm = emit_program(lifted);
+    let mut w = WATFormatter::default();
+    wasm.format(&mut w);
+
+    if let Err(e) = write("temp.wat", w.to_string()) {
+        println!("{:?}", e);
+        return;
+    }
+
+    let Output {
+        status: convert_status,
+        ..
+    } = match Command::new("wat2wasm").arg("temp.wat").output() {
+        Ok(o) => o,
+        Err(e) => {
+            println!("{:?}", e);
+            return;
+        }
+    };
+    if !convert_status.success() {
+        println!("wat2wasm failed, try running `wat2wasm temp.wat` on your own machine");
+        return;
+    }
+
+    let Output {
+        status: run_status,
+        stdout: run_output,
+        ..
+    } = match Command::new("node").arg("runwasm.js").output() {
+        Ok(o) => o,
+        Err(e) => {
+            println!("{:?}", e);
+            return;
+        }
+    };
+
+    if !run_status.success() {
+        println!("failed to run the generated .wasm file, try running `node runwasm.js` on your own machine");
+        return;
+    }
+
+    let num = run_output
+        .into_iter()
+        .fold(0, |total, digit| total * 10 + (digit as u64 - 48));
+
+    println!(
+        "= {}",
+        match final_type {
+            Type::Arrow(_, _) => String::from("<fun>"),
+            Type::Constructor(Constructor::Number) =>
+                f64::from_ne_bytes(num.to_ne_bytes()).to_string(),
+            Type::Constructor(Constructor::Boolean) =>
+                String::from(if num == 0 { "false" } else { "true" }),
+            Type::Constructor(Constructor::Unit) => String::from("()"),
+            _ => {
+                println!("I don't know how to display the type {}", final_type);
+                return;
+            }
+        }
+    );
+}
+
+fn main() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines().map(Result::unwrap);
+    let mut state = ReplState {
+        type_debug: false,
+        eval: true,
+    };
+    loop {
+        println!("====");
+        let next = if let Some(l) = lines.next() {
+            l
+        } else {
+            println!("thank you for using parchment.");
+            return Ok(());
+        };
+
+        let stripped: String = next
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != ' ')
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+        match &stripped[..] {
+            "+typedebug" => state.type_debug = true,
+            "-typedebug" => state.type_debug = false,
+            "+eval" => state.eval = true,
+            "-eval" => state.eval = false,
+            "quit" => {
+                println!("thank you for using parchment.");
+                return Ok(());
+            }
+            _ => {
+                process_text(read_ast(next, &mut lines), &state);
+            }
+        }
+    }
 }

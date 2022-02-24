@@ -62,7 +62,9 @@ fn active_type_vars(c: &Constraint) -> HashSet<TypeVar> {
 fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
     match (t1, t2) {
         (Type::Variable(v), t) | (t, Type::Variable(v)) => {
-            if t.contains(v) {
+            if t == &Type::Variable(v.clone()) {
+                Ok(HashMap::new())
+            } else if t.contains(v) {
                 Err(TypeError::InfiniteType(t.clone(), v.clone()))
             } else {
                 Ok(HashMap::unit(v.clone(), t.clone()))

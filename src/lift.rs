@@ -97,10 +97,10 @@ pub fn lift(
     match e {
         expr::Expr::Function(p, b) => {
             let (defs, ptr, env) = lift_function(p, b, None, current_env, v, fun)?;
-            
+
             Ok(Program {
                 defs,
-                main: Expr::Closure(ptr, Box::new(Expr::Record(env)))
+                main: Expr::Closure(ptr, Box::new(Expr::Record(env))),
             })
         }
         expr::Expr::Application(e1, e2) => {
@@ -132,7 +132,7 @@ pub fn lift(
             if let Ok(i) = current_env.binary_search(v) {
                 Ok(Program {
                     defs: Vec::new(),
-                    main: Expr::RecordLookup(Box::new(get_env()), i)
+                    main: Expr::RecordLookup(Box::new(get_env()), i),
                 })
             } else {
                 Ok(Program {
@@ -174,8 +174,12 @@ pub fn lift(
                 match stmt {
                     // this is the only form of recursive let statements that we support
                     Statement::Let(Pattern::Variable(var), expr::Expr::Function(p, b)) => {
-                        let (ds, ptr, env) = lift_function(p, b, Some(var.clone()), current_env, v, fun)?;
-                        exprs.push(Expr::Assign(var.clone(), Box::new(Expr::Closure(ptr, Box::new(Expr::Record(env))))));
+                        let (ds, ptr, env) =
+                            lift_function(p, b, Some(var.clone()), current_env, v, fun)?;
+                        exprs.push(Expr::Assign(
+                            var.clone(),
+                            Box::new(Expr::Closure(ptr, Box::new(Expr::Record(env)))),
+                        ));
                         defs.extend(ds);
                     }
                     Statement::Let(p, b) => {
@@ -219,7 +223,10 @@ pub fn lift(
 
             let f2 = FunctionDef {
                 arg: String::from("a"),
-                body: Expr::Closure(id1, Box::new(Expr::Record(vec![Expr::Variable(String::from("a"))]))),
+                body: Expr::Closure(
+                    id1,
+                    Box::new(Expr::Record(vec![Expr::Variable(String::from("a"))])),
+                ),
                 env: Vec::new(),
                 locals: HashSet::new(),
             };
@@ -250,9 +257,13 @@ fn lift_function(
 
     let mut body = lift(b, &env, v, fun)?;
 
-    let arg = v.fresh();
+    let (mut lookup, arg) = if let Pattern::Variable(var) = p {
+        (vec![], var.clone())
+    } else {
+        let arg = v.fresh();
 
-    let mut lookup = to_lookup(p, Expr::Variable(arg.clone()));
+        (to_lookup(p, Expr::Variable(arg.clone())), arg)
+    };
     lookup.push(body.main);
 
     let full_body = Expr::All(lookup);
@@ -284,14 +295,11 @@ fn lift_function(
 
 pub fn locals(e: &self::Expr) -> HashSet<String> {
     match e {
-        Expr::Variable(_)
-        | Expr::Number(_)
-        | Expr::Boolean(_)
-        | Expr::RecordLookup(_, _) => HashSet::new(),
-        Expr::Application(e1, e2) => locals(e1).union(locals(e2)),
-        Expr::All(es) | Expr::Record(es) => {
-            es.iter().flat_map(locals).collect()
+        Expr::Variable(_) | Expr::Number(_) | Expr::Boolean(_) | Expr::RecordLookup(_, _) => {
+            HashSet::new()
         }
+        Expr::Application(e1, e2) => locals(e1).union(locals(e2)),
+        Expr::All(es) | Expr::Record(es) => es.iter().flat_map(locals).collect(),
         Expr::Ignore(e) | Expr::Closure(_, e) => locals(e),
         Expr::Assign(v, e) => locals(e).update(v.clone()),
         Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),

@@ -171,7 +171,6 @@ pub fn gen_block(
             Statement::Let(p, body) => {
                 let (bindings, tp) = p.type_pattern(t);
                 let (mut a1, c1, t1) = generate(body, t, m.clone())?;
-                a1.retain(|(var, _)| !bindings.contains_key(var));
                 let (mut a2, c2, t2) = gen_block(&b[1..], t, m.clone())?;
 
                 let mut c3: Vec<_> = a2
@@ -185,6 +184,20 @@ pub fn gen_block(
                         ))
                     })
                     .collect();
+                c3.extend(
+                    a1.iter()
+                        .filter_map(|(var, tv1)| {
+                            let tv2 = bindings.get(var)?;
+                            Some(Constraint::Equality(
+                                Type::Variable(tv1.clone()),
+                                Type::Variable(tv2.clone()),
+                            ))
+                        })
+                        .collect::<Vec<_>>(),
+                );
+
+                a1.retain(|(var, _)| !bindings.contains_key(var));
+
                 c3.extend(c1);
                 c3.extend(c2);
                 c3.push(Constraint::Equality(tp, t1));

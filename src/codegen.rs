@@ -71,22 +71,25 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             is.extend(call_closure());
             is
         }
-        Expr::Variable(v) => if &v == "env" {
-            vec![Instruction::GetLocal(v), Instruction::Extend(Type::I64, Type::I32)]
-        } else {
-            vec![Instruction::GetLocal(v)]
-        },
+        Expr::Variable(v) => {
+            if &v == "env" {
+                vec![
+                    Instruction::GetLocal(v),
+                    Instruction::Extend(Type::I64, Type::I32),
+                ]
+            } else {
+                vec![Instruction::GetLocal(v)]
+            }
+        }
         Expr::Number(n) => vec![
             Instruction::Const(Value::F64(n)),
             Instruction::Reinterpret(Type::I64, Type::F64),
         ],
         Expr::Boolean(b) => vec![Instruction::Const(Value::I64(if b { 1 } else { 0 }))],
         Expr::Closure(func, env) => match *env {
-            Expr::Record(env) if env.is_empty() => 
-                make_function(func),
-            env =>
-                make_closure(func, env)
-        }
+            Expr::Record(env) if env.is_empty() => make_function(func),
+            env => make_closure(func, env),
+        },
         Expr::All(es) => es.into_iter().flat_map(emit_expr).collect(),
         Expr::Assign(v, e) => {
             let mut is = Vec::new();
