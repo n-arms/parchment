@@ -93,7 +93,14 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
             }
             Ok(s)
         }
-        (l, r) => Err(TypeError::TypeMismatch(l.clone(), r.clone()))
+        (Type::Tuple(ts1), Type::Tuple(ts2)) => {
+            let mut s = Substitution::new();
+            for (t1, t2) in ts1.iter().zip(ts2.iter()) {
+                s = combine(unify(&t1.apply(s.clone()), &t2.apply(s.clone()))?, s);
+            }
+            Ok(s)
+        }
+        (l, r) => Err(TypeError::TypeMismatch(l.clone(), r.clone())),
     }
 }
 

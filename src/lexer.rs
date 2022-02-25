@@ -150,7 +150,11 @@ pub fn scan(prog: &str) -> Vec<Token> {
                         buf.push(text[0]);
                         text = &text[1..];
                     }
-                    out.push(Token::Identifier(buf));
+                    out.push(if buf.chars().nth(0).unwrap().is_ascii_uppercase() {
+                        Token::Constructor(buf)
+                    } else {
+                        Token::Identifier(buf)
+                    });
                 } else if c.is_numeric() {
                     let mut buf = String::new();
                     while !text.is_empty() && (text[0].is_numeric() || text[0] == '.') {

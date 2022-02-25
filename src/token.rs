@@ -15,6 +15,7 @@ pub enum Token {
     Lpar,
     Rpar,
     Identifier(String),
+    Constructor(String),
     Fn,
     Rarrow,
     Number(f64),
@@ -55,6 +56,13 @@ impl cmp::PartialEq for Token {
             Token::Rarrow => matches!(Token::Rarrow, other),
             Token::Identifier(i) => {
                 if let Token::Identifier(j) = other {
+                    i == j
+                } else {
+                    false
+                }
+            }
+            Token::Constructor(i) => {
+                if let Token::Constructor(j) = other {
                     i == j
                 } else {
                     false
@@ -120,6 +128,7 @@ impl std::hash::Hash for Token {
             Token::LessThanEquals => 25,
             Token::GreaterThan => 26,
             Token::GreaterThanEquals => 27,
+            Token::Constructor(_) => 28,
         }])
     }
 }

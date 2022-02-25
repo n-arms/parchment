@@ -49,6 +49,7 @@ pub enum Type {
     Arrow(Box<Type>, Box<Type>),
     Constructor(Constructor),
     Record(HashMap<String, Type>),
+    Tuple(Vec<Type>)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -75,6 +76,7 @@ impl Type {
             Type::Variable(v1) => v1 == v,
             Type::Constructor(_) => false,
             Type::Record(r) => r.values().any(|t| t.contains(v)),
+            Type::Tuple(t) => t.iter().any(|t| t.contains(v))
         }
     }
 }
@@ -94,6 +96,9 @@ impl Apply for Type {
                     .map(|(k, v)| (k.clone(), v.apply(s.clone())))
                     .collect(),
             ),
+            Type::Tuple(t) => Type::Tuple(
+                t.iter().map(|t| t.apply(s.clone())).collect()
+            )
         }
     }
 }
@@ -109,6 +114,7 @@ impl Free for Type {
             Type::Constructor(_) => HashSet::new(),
             Type::Arrow(e1, e2) => e1.free_type_vars().union(e2.free_type_vars()),
             Type::Record(r) => r.values().flat_map(Free::free_type_vars).collect(),
+            Type::Tuple(t) => t.iter().flat_map(Free::free_type_vars).collect()
         }
     }
 }
@@ -134,6 +140,7 @@ impl fmt::Display for Type {
                 }
             ),
             Type::Record(r) => write!(f, "{:?}", r),
+            Type::Tuple(t) => write!(f, "{:?}", t),
         }
     }
 }

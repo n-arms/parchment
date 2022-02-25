@@ -42,6 +42,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             Token::True => Expr::Boolean(true),
             Token::False => Expr::Boolean(false)
         );
+
         let variable = select!(
             Token::Identifier(s) => s
         );
@@ -51,6 +52,16 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
                 .map(Pattern::Variable)
                 .or(record(variable, pattern.clone())
                     .map(|v| Pattern::Record(v.into_iter().collect())))
+                .or(just(Token::Lpar)
+                    .ignore_then(pattern.clone())
+                    .then(just(Token::Comma)
+                          .ignore_then(pattern)
+                          .repeated())
+                    .then_ignore(just(Token::Rpar))
+                    .map(|(hd, mut tl)| {
+                        tl.insert(0, hd);
+                        Pattern::Tuple(tl)
+                    }))
         });
 
         let function = just(Token::Fn)
@@ -83,14 +94,31 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
         let parens = expr
             .clone()
             .delimited_by(just(Token::Lpar), just(Token::Rpar));
+
         let record_lit =
             record(variable, expr.clone()).map(|v| Expr::Record(v.into_iter().collect()));
+
+        let tuple = just(Token::Lpar)
+            .ignore_then(expr.clone())
+            .then(just(Token::Comma)
+                .ignore_then(expr.clone())
+                .repeated())
+            .then_ignore(just(Token::Rpar))
+            .map(|(e, es)| {
+                let mut terms = Vec::new();
+                terms.push(e);
+                terms.extend(es);
+
+                Expr::Tuple(terms)
+            });
+
         let atom = parens
             .or(function)
             .or(constant)
             .or(record_lit)
             .or(block)
             .or(if_)
+            .or(tuple)
             .or(variable.map(Expr::Variable));
 
         let make_times = make_bin!(Operator::Times);
@@ -136,9 +164,10 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
             .foldl(|l, (f, r)| f(l, r));
 
-        eqs.clone()
+        let apps = eqs.clone()
             .then(eqs.repeated())
-            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)))
+            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)));
+        apps
     })
     .then_ignore(end())
 }

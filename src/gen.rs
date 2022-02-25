@@ -37,7 +37,7 @@ pub enum TypeError {
     ConstructorMismatch(Constructor, Constructor),
     MissingField(String),
     NoSolvableConstraints,
-    TypeMismatch(Type, Type)
+    TypeMismatch(Type, Type),
 }
 
 pub type Result<A> = std::result::Result<A, TypeError>;
@@ -141,6 +141,20 @@ pub fn generate(
             }
 
             Ok((a, cs, Type::Record(ts)))
+        }
+        Expr::Tuple(es) => {
+            let mut a = HashSet::new();
+            let mut cs = Vec::new();
+            let mut ts = Vec::new();
+
+            for e in es {
+                let (a1, c1, t1) = generate(e, t, m.clone())?;
+                a.extend(a1);
+                cs.extend(c1);
+                ts.push(t1);
+            }
+
+            Ok((a, cs, Type::Tuple(ts)))
         }
         Expr::Operator(o) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
         Expr::Match(_, _) => todo!(),

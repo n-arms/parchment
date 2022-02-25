@@ -8,9 +8,11 @@ use std::fmt;
 pub enum Pattern<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> {
     Variable(V),
     Record(HashMap<V, Pattern<V>>),
+    Tuple(Vec<Pattern<V>>)
 }
 
 impl Pattern<String> {
+    /// create a mapping from type vars to types, and return a type representing the pattern
     pub fn type_pattern(&self, t: &TypeVarSet) -> (HashMap<String, TypeVar>, Type) {
         match self {
             Pattern::Variable(v) => {
@@ -31,6 +33,16 @@ impl Pattern<String> {
                     );
                 (b, Type::Record(t))
             }
+            Pattern::Tuple(ps) => {
+                let mut bindings = HashMap::new();
+                let mut terms = Vec::new();
+                for p in ps {
+                    let (b1, p1) = p.type_pattern(t);
+                    bindings.extend(b1);
+                    terms.push(p1);
+                }
+                (bindings, Type::Tuple(terms))
+            }
         }
     }
 
@@ -38,6 +50,7 @@ impl Pattern<String> {
         match self {
             Pattern::Variable(v) => HashSet::unit(v.clone()),
             Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
+            Pattern::Tuple(t) => t.iter().flat_map(Pattern::bound_vars).collect()
         }
     }
 }
@@ -54,6 +67,7 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     If(Box<Expr<V>>, Box<Expr<V>>, Box<Expr<V>>),
     Match(Box<Expr<V>>, Vec<(Pattern<V>, Expr<V>)>),
     Block(Vec<Statement<V>>),
+    Tuple(Vec<Expr<V>>)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -80,6 +94,13 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<
             Expr::Operator(o1) => {
                 if let Expr::Operator(o2) = other {
                     o1 == o2
+                } else {
+                    false
+                }
+            }
+            Expr::Tuple(es1) => {
+                if let Expr::Tuple(es2) = other {
+                    es1 == es2 
                 } else {
                     false
                 }
@@ -280,6 +301,7 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Disp
         match self {
             Pattern::Variable(v) => write!(f, "{}", v),
             Pattern::Record(r) => write!(f, "{:?}", r),
+            Pattern::Tuple(t) => write!(f, "{:?}", t)
         }
     }
 }

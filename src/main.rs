@@ -13,7 +13,7 @@ mod wasm;
 use codegen::emit_program;
 use gen::generate;
 use im::HashSet;
-use lift::lift;
+use lift::{ConstructorEnv, lift};
 use parser::parse;
 use solve::solve;
 use std::fs::write;
@@ -99,7 +99,7 @@ fn process_text(lines: String, state: &ReplState) {
         return;
     }
 
-    let lifted = match lift(&ast, &[], &VarSet::default(), &VarSet::default()) {
+    let lifted = match lift(&ast, &[], &VarSet::default(), &VarSet::default(), &mut ConstructorEnv::default()) {
         Ok(l) => l,
         Err(()) => return,
     };
@@ -187,7 +187,7 @@ fn main() -> io::Result<()> {
             .filter(|c| !c.is_whitespace() && *c != ' ')
             .map(|c| c.to_ascii_lowercase())
             .collect();
-        
+
         match &stripped[..] {
             "+typedebug" => state.type_debug = true,
             "-typedebug" => state.type_debug = false,
