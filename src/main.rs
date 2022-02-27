@@ -13,13 +13,13 @@ mod wasm;
 use codegen::emit_program;
 use gen::generate;
 use im::HashSet;
-use lift::{ConstructorEnv, lift};
+use lift::{lift, ConstructorEnv};
 use parser::parse;
 use solve::solve;
 use std::fs::write;
 use std::io::{self, BufRead};
 use std::process::{Command, Output};
-use types::{Apply, Constructor, Type, VarSet};
+use types::{Apply, Constructor, Type, VarSet, Variant};
 use wasm::WATFormatter;
 
 fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
@@ -63,6 +63,14 @@ fn process_text(lines: String, state: &ReplState) {
             return;
         }
     };
+    if state.type_debug {
+        println!("constraints");
+        for cons in &c {
+            println!("\t{}", cons);
+        }
+        println!("\nbase type\n\t{}", t);
+    }
+
     if !a.is_empty() {
         println!("non empty assumption set:");
         for (v, t) in a {
@@ -80,11 +88,6 @@ fn process_text(lines: String, state: &ReplState) {
     };
 
     if state.type_debug {
-        println!("constraints");
-        for cons in c {
-            println!("\t{}", cons);
-        }
-        println!("\nbase type\n\t{}", t);
         println!("\nsubstitutions");
         for (tv, t) in &s {
             println!("\t{} => {}", tv, t);
@@ -99,7 +102,13 @@ fn process_text(lines: String, state: &ReplState) {
         return;
     }
 
-    let lifted = match lift(&ast, &[], &VarSet::default(), &VarSet::default(), &mut ConstructorEnv::default()) {
+    let lifted = match lift(
+        &ast,
+        &[],
+        &VarSet::default(),
+        &VarSet::default(),
+        &mut ConstructorEnv::default(),
+    ) {
         Ok(l) => l,
         Err(()) => return,
     };

@@ -156,6 +156,27 @@ pub fn generate(
 
             Ok((a, cs, Type::Tuple(ts)))
         }
+        Expr::Construction(c, es) => {
+            let mut a = HashSet::new();
+            let mut cs = Vec::new();
+            let mut ts = Vec::new();
+
+            for e in es {
+                let (a1, c1, t1) = generate(e, t, m.clone())?;
+                a.extend(a1);
+                cs.extend(c1);
+                ts.push(t1);
+            }
+
+            Ok((
+                a,
+                cs,
+                Type::OneOf(vec![Variant {
+                    name: c.clone(),
+                    fields: ts,
+                }]),
+            ))
+        }
         Expr::Operator(o) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
         Expr::Match(_, _) => todo!(),
     }

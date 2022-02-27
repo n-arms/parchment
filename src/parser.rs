@@ -47,6 +47,10 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             Token::Identifier(s) => s
         );
 
+        let constructor = select!(
+            Token::Constructor(c) => c
+        );
+
         let pattern = recursive(|pattern| {
             variable
                 .map(Pattern::Variable)
@@ -54,14 +58,20 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
                     .map(|v| Pattern::Record(v.into_iter().collect())))
                 .or(just(Token::Lpar)
                     .ignore_then(pattern.clone())
-                    .then(just(Token::Comma)
-                          .ignore_then(pattern)
-                          .repeated())
+                    .then(just(Token::Comma).ignore_then(pattern.clone()).repeated())
                     .then_ignore(just(Token::Rpar))
                     .map(|(hd, mut tl)| {
                         tl.insert(0, hd);
                         Pattern::Tuple(tl)
                     }))
+                .or(just(Token::Lpar)
+                    .ignore_then(pattern.clone())
+                    .then_ignore(just(Token::Rpar))
+                )
+                .or(constructor.clone()
+                    .then(pattern.clone().repeated())
+                    .map(|(c, es)| Pattern::Construction(c, es))
+                )
         });
 
         let function = just(Token::Fn)
@@ -100,9 +110,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
 
         let tuple = just(Token::Lpar)
             .ignore_then(expr.clone())
-            .then(just(Token::Comma)
-                .ignore_then(expr.clone())
-                .repeated())
+            .then(just(Token::Comma).ignore_then(expr.clone()).repeated())
             .then_ignore(just(Token::Rpar))
             .map(|(e, es)| {
                 let mut terms = Vec::new();
@@ -112,14 +120,19 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
                 Expr::Tuple(terms)
             });
 
-        let atom = parens
-            .or(function)
-            .or(constant)
-            .or(record_lit)
-            .or(block)
-            .or(if_)
-            .or(tuple)
-            .or(variable.map(Expr::Variable));
+        let atom = recursive(|atom| {
+            parens
+                .or(function)
+                .or(constant)
+                .or(record_lit)
+                .or(block)
+                .or(if_)
+                .or(tuple)
+                .or(constructor
+                    .then(atom.clone().repeated())
+                    .map(|(c, es)| Expr::Construction(c, es)))
+                .or(variable.map(Expr::Variable))
+        });
 
         let make_times = make_bin!(Operator::Times);
         let product = atom
@@ -164,7 +177,8 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
             .foldl(|l, (f, r)| f(l, r));
 
-        let apps = eqs.clone()
+        let apps = eqs
+            .clone()
             .then(eqs.repeated())
             .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)));
         apps

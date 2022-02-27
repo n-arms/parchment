@@ -85,9 +85,7 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             Instruction::Const(Value::F64(n)),
             Instruction::Reinterpret(Type::I64, Type::F64),
         ],
-        Expr::Integer(i) => vec![
-            Instruction::Const(Value::I64(i))
-        ],
+        Expr::Integer(i) => vec![Instruction::Const(Value::I64(i))],
         Expr::Boolean(b) => vec![Instruction::Const(Value::I64(if b { 1 } else { 0 }))],
         Expr::Closure(func, env) => match *env {
             Expr::Record(env) if env.is_empty() => make_function(func),

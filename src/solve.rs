@@ -27,8 +27,8 @@ pub fn solve(cs: HashSet<Constraint>, t: &TypeVarSet) -> Result<Substitution> {
 fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constraint>)> {
     for c in &cs {
         match c {
-            Constraint::Equality(t1, t2) => {
-                return Ok((Constraint::Equality(t1.clone(), t2.clone()), cs.without(c)))
+            Constraint::Equality(..) => {
+                return Ok((c.clone(), cs.without(c)))
             }
             Constraint::InstanceOf(_, m, sup) => {
                 let cs_active = cs
@@ -52,7 +52,9 @@ fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constra
 
 fn active_type_vars(c: &Constraint) -> HashSet<TypeVar> {
     match c {
-        Constraint::Equality(t1, t2) => t1.free_type_vars().union(t2.free_type_vars()),
+        Constraint::Equality(t1, t2) => {
+            t1.free_type_vars().union(t2.free_type_vars())
+        }
         Constraint::InstanceOf(sub, m, sup) => sub
             .free_type_vars()
             .union(m.clone().intersection(sup.free_type_vars())),

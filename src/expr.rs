@@ -1,4 +1,4 @@
-use super::types::{Type, TypeVar, TypeVarSet};
+use super::types::{Type, TypeVar, TypeVarSet, Variant};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
@@ -8,7 +8,8 @@ use std::fmt;
 pub enum Pattern<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> {
     Variable(V),
     Record(HashMap<V, Pattern<V>>),
-    Tuple(Vec<Pattern<V>>)
+    Tuple(Vec<Pattern<V>>),
+    Construction(V, Vec<Pattern<V>>),
 }
 
 impl Pattern<String> {
@@ -43,6 +44,21 @@ impl Pattern<String> {
                 }
                 (bindings, Type::Tuple(terms))
             }
+            Pattern::Construction(name, ps) => {
+                let mut bindings = HashMap::new();
+                let mut terms = Vec::new();
+                for p in ps {
+                    let (b1, p1) = p.type_pattern(t);
+                    bindings.extend(b1);
+                    terms.push(p1);
+                }
+                (bindings, Type::OneOf(vec![
+                    Variant {
+                        name: name.clone(),
+                        fields: terms
+                    }
+                ]))
+            }
         }
     }
 
@@ -50,7 +66,8 @@ impl Pattern<String> {
         match self {
             Pattern::Variable(v) => HashSet::unit(v.clone()),
             Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
-            Pattern::Tuple(t) => t.iter().flat_map(Pattern::bound_vars).collect()
+            Pattern::Construction(_, t) | Pattern::Tuple(t) => t.iter().flat_map(Pattern::bound_vars).collect(),
+            
         }
     }
 }
@@ -67,7 +84,8 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     If(Box<Expr<V>>, Box<Expr<V>>, Box<Expr<V>>),
     Match(Box<Expr<V>>, Vec<(Pattern<V>, Expr<V>)>),
     Block(Vec<Statement<V>>),
-    Tuple(Vec<Expr<V>>)
+    Tuple(Vec<Expr<V>>),
+    Construction(V, Vec<Expr<V>>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -98,9 +116,16 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<
                     false
                 }
             }
+            Expr::Construction(c1, es1) => {
+                if let Expr::Construction(c2, es2) = other {
+                    c1 == c2 && es1 == es2
+                } else {
+                    false
+                }
+            }
             Expr::Tuple(es1) => {
                 if let Expr::Tuple(es2) = other {
-                    es1 == es2 
+                    es1 == es2
                 } else {
                     false
                 }
@@ -241,6 +266,12 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
                 acc
             })
         ),
+        Expr::Construction(c, es) => format!(
+            "{}{}",
+            c,
+            es.iter()
+                .fold(String::new(), |acc, e| acc + " " + &show_expr(margin, e))
+        ),
         Expr::If(p, e1, e2) => format!(
             "if {}\n{}  then {}\n{}  else {}",
             show_expr(margin, p),
@@ -301,7 +332,8 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Disp
         match self {
             Pattern::Variable(v) => write!(f, "{}", v),
             Pattern::Record(r) => write!(f, "{:?}", r),
-            Pattern::Tuple(t) => write!(f, "{:?}", t)
+            Pattern::Tuple(t) => write!(f, "{:?}", t),
+            Pattern::Construction(c, ps) => write!(f, "{} {:?}", c, ps)
         }
     }
 }

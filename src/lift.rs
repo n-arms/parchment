@@ -59,7 +59,9 @@ fn free(e: &expr::Expr<String>) -> HashSet<String> {
         expr::Expr::Operator(_) | expr::Expr::Number(_) | expr::Expr::Boolean(_) => HashSet::new(),
         expr::Expr::Variable(v) => HashSet::unit(v.clone()),
         expr::Expr::Record(r) => r.values().flat_map(free).collect(),
-        expr::Expr::Tuple(es) => es.iter().flat_map(free).collect(),
+        expr::Expr::Tuple(es) | expr::Expr::Construction(_, es) => {
+            es.iter().flat_map(free).collect()
+        }
         expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
         expr::Expr::Block(b) => free_block(b),
         expr::Expr::Match(_, _) => todo!(),
@@ -88,26 +90,29 @@ pub fn to_lookup(p: &Pattern<String>, base: Expr) -> Vec<Expr> {
                 .flat_map(|(i, (_, p))| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
                 .collect()
         }
-        Pattern::Tuple(t) => {
-            t
-                .into_iter()
-                .enumerate()
-                .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
-                .collect()
-        }
+        Pattern::Tuple(t) => t
+            .into_iter()
+            .enumerate()
+            .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
+            .collect(),
+        Pattern::Construction(_, ps) => ps
+            .into_iter()
+            .enumerate()
+            .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i + 1)))
+            .collect()
     }
 }
 
 pub struct ConstructorEnv {
     new: VarSet<u64>,
-    interned: HashMap<String, u64>
+    interned: HashMap<String, u64>,
 }
 
 impl Default for ConstructorEnv {
     fn default() -> Self {
         ConstructorEnv {
             new: VarSet::new(|i| i as u64),
-            interned: HashMap::new()
+            interned: HashMap::new(),
         }
     }
 }
@@ -129,9 +134,25 @@ pub fn lift(
     current_env: &[String],
     v: &VarSet<String>,
     fun: &FunSet,
-    cons: &mut ConstructorEnv
+    cons: &mut ConstructorEnv,
 ) -> Result<Program, ()> {
     match e {
+        expr::Expr::Construction(c, es) => {
+            let mut defs = Vec::new();
+            let mut terms = Vec::new();
+            terms.push(Expr::Integer(cons.get_or_intern(c) as i64));
+
+            for e in es {
+                let Program { defs: d, main } = lift(e, current_env, v, fun, cons)?;
+                defs.extend(d);
+                terms.push(main);
+            }
+
+            Ok(Program {
+                defs,
+                main: Expr::Record(terms),
+            })
+        }
         expr::Expr::Function(p, b) => {
             let (defs, ptr, env) = lift_function(p, b, None, current_env, v, fun, cons)?;
 
@@ -200,17 +221,14 @@ pub fn lift(
             let mut terms = Vec::new();
 
             for e in es {
-                let Program {
-                    defs: d,
-                    main
-                } = lift(e, current_env, v, fun, cons)?;
+                let Program { defs: d, main } = lift(e, current_env, v, fun, cons)?;
                 defs.extend(d);
                 terms.push(main);
             }
 
             Ok(Program {
                 defs,
-                main: Expr::Record(terms)
+                main: Expr::Record(terms),
             })
         }
         expr::Expr::If(p, c, a) => {
@@ -302,7 +320,7 @@ fn lift_function(
     current_env: &[String],
     v: &VarSet<String>,
     fun: &FunSet,
-    cons: &mut ConstructorEnv
+    cons: &mut ConstructorEnv,
 ) -> Result<(Vec<FunctionDef>, usize, Vec<Expr>), ()> {
     let f_id = fun.fresh();
     let mut env: Vec<_> = free(b)
@@ -351,9 +369,11 @@ fn lift_function(
 
 pub fn locals(e: &Expr) -> HashSet<String> {
     match e {
-        Expr::Variable(_) | Expr::Number(_) | Expr::Boolean(_) | Expr::Integer(_) | Expr::RecordLookup(_, _) => {
-            HashSet::new()
-        }
+        Expr::Variable(_)
+        | Expr::Number(_)
+        | Expr::Boolean(_)
+        | Expr::Integer(_)
+        | Expr::RecordLookup(_, _) => HashSet::new(),
         Expr::Application(e1, e2) => locals(e1).union(locals(e2)),
         Expr::All(es) | Expr::Record(es) => es.iter().flat_map(locals).collect(),
         Expr::Ignore(e) | Expr::Closure(_, e) => locals(e),
