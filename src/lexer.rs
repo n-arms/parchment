@@ -55,6 +55,10 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::Plus);
                 text = &text[1..];
             }
+            '|' => {
+                out.push(Token::Pipe);
+                text = &text[1..];
+            }
             'f' if text.len() > 2 && text[1] == 'n' && text[2] == ' ' => {
                 out.push(Token::Fn);
                 text = &text[3..];
@@ -75,6 +79,14 @@ pub fn scan(prog: &str) -> Vec<Token> {
             {
                 out.push(Token::Then);
                 text = &text[5..];
+            }
+            't' if text.len() > 3 
+                && text[1] == 'y'
+                && text[2] == 'p'
+                && text[3] == 'e' =>
+            {
+                out.push(Token::Type);
+                text = &text[4..];
             }
             'e' if text.len() > 4
                 && text[1] == 'l'
@@ -150,7 +162,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
                         buf.push(text[0]);
                         text = &text[1..];
                     }
-                    out.push(if buf.chars().nth(0).unwrap().is_ascii_uppercase() {
+                    out.push(if buf.chars().next().unwrap().is_ascii_uppercase() {
                         Token::Constructor(buf)
                     } else {
                         Token::Identifier(buf)

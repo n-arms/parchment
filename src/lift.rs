@@ -74,6 +74,7 @@ fn free_block(b: &[Statement<String>]) -> HashSet<String> {
             .union(free_block(rest))
             .relative_complement(p.bound_vars()),
         [Statement::Raw(e), rest @ ..] => free(e).union(free_block(rest)),
+        [Statement::TypeDef(..), rest @ ..] => free_block(rest),
         [] => HashSet::new(),
     }
 }
@@ -91,12 +92,12 @@ pub fn to_lookup(p: &Pattern<String>, base: Expr) -> Vec<Expr> {
                 .collect()
         }
         Pattern::Tuple(t) => t
-            .into_iter()
+            .iter()
             .enumerate()
             .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
             .collect(),
         Pattern::Construction(_, ps) => ps
-            .into_iter()
+            .iter()
             .enumerate()
             .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i + 1)))
             .collect()
@@ -139,8 +140,7 @@ pub fn lift(
     match e {
         expr::Expr::Construction(c, es) => {
             let mut defs = Vec::new();
-            let mut terms = Vec::new();
-            terms.push(Expr::Integer(cons.get_or_intern(c) as i64));
+            let mut terms = vec![Expr::Integer(cons.get_or_intern(c) as i64)];
 
             for e in es {
                 let Program { defs: d, main } = lift(e, current_env, v, fun, cons)?;
@@ -272,6 +272,7 @@ pub fn lift(
                         });
                         defs.extend(d);
                     }
+                    Statement::TypeDef(..) => ()
                 }
             }
             Ok(Program {

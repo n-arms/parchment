@@ -36,6 +36,8 @@ pub enum Token {
     Plus,
     Minus,
     Times,
+    Type,
+    Pipe,
     DoubleEqs,
     LessThan,
     LessThanEquals,
@@ -75,6 +77,8 @@ impl cmp::PartialEq for Token {
                     false
                 }
             }
+            Token::Pipe => matches!(Token::Pipe, other),
+            Token::Type => matches!(Token::Type, other),
             Token::Let => matches!(Token::Let, other),
             Token::Eqs => matches!(Token::Eqs, other),
             Token::In => matches!(Token::In, other),
@@ -129,6 +133,8 @@ impl std::hash::Hash for Token {
             Token::GreaterThan => 26,
             Token::GreaterThanEquals => 27,
             Token::Constructor(_) => 28,
+            Token::Pipe => 29,
+            Token::Type => 30
         }])
     }
 }

@@ -51,6 +51,7 @@ pub enum Type {
     Record(HashMap<String, Type>),
     Tuple(Vec<Type>),
     OneOf(Vec<Variant>),
+    Defined(String)
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -87,6 +88,7 @@ impl Type {
             Type::OneOf(ts) => ts
                 .iter()
                 .any(|Variant { fields, .. }| fields.iter().any(|t| t.contains(v))),
+            Type::Defined(_) => false,
         }
     }
 }
@@ -115,6 +117,7 @@ impl Apply for Type {
                     })
                     .collect(),
             ),
+            Type::Defined(t) => Type::Defined(t.clone())
         }
     }
 }
@@ -127,7 +130,7 @@ impl Free for Type {
     fn free_type_vars(&self) -> HashSet<TypeVar> {
         match self {
             Type::Variable(v) => HashSet::unit(v.clone()),
-            Type::Constructor(_) => HashSet::new(),
+            Type::Defined(_) | Type::Constructor(_) => HashSet::new(),
             Type::Arrow(e1, e2) => e1.free_type_vars().union(e2.free_type_vars()),
             Type::Record(r) => r.values().flat_map(Free::free_type_vars).collect(),
             Type::Tuple(t) => t.iter().flat_map(Free::free_type_vars).collect(),
@@ -200,6 +203,7 @@ impl fmt::Display for Type {
                 write!(f, "]")?;
                 Ok(())
             }
+            Type::Defined(dt) => dt.fmt(f)
         }
     }
 }

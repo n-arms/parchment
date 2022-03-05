@@ -13,6 +13,7 @@ macro_rules! make_bin {
 }
 
 use super::expr::{Expr, Operator, Pattern, Statement};
+use super::types::{Type, Variant, Constructor};
 use super::token::Token;
 use chumsky::prelude::*;
 
@@ -51,6 +52,33 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             Token::Constructor(c) => c
         );
 
+        let type_constructor = select!(
+            Token::Constructor(c) if &c == "Num" => Type::Constructor(Constructor::Number),
+            Token::Constructor(c) if &c == "Bool" => Type::Constructor(Constructor::Boolean)
+        );
+
+        let typ = recursive(|typ| {
+            variable
+                .map(Type::Variable)
+                .or(type_constructor)
+                .or(just(Token::Lpar)
+                    .ignore_then(typ.clone())
+                    .then(just(Token::Comma).ignore_then(typ.clone()).repeated())
+                    .then_ignore(just(Token::Rpar))
+                    .map(|(hd, mut tl)| {
+                        tl.insert(0, hd);
+                        Type::Tuple(tl)
+                    })
+                )
+        });
+
+        let variant = constructor
+            .then(typ.clone().repeated())
+            .map(|(name, fields)| Variant {
+                name,
+                fields
+            });
+
         let pattern = recursive(|pattern| {
             variable
                 .map(Pattern::Variable)
@@ -68,7 +96,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
                     .ignore_then(pattern.clone())
                     .then_ignore(just(Token::Rpar))
                 )
-                .or(constructor.clone()
+                .or(constructor
                     .then(pattern.clone().repeated())
                     .map(|(c, es)| Pattern::Construction(c, es))
                 )
@@ -86,7 +114,19 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then(expr.clone())
             .map(|(p, e)| Statement::Let(p, e))
             .or(expr.clone().map(Statement::Raw))
-            .then_ignore(just(Token::Semicolon));
+            .then_ignore(just(Token::Semicolon))
+            .or(just(Token::Type)
+                .ignore_then(variable)
+                .then_ignore(just(Token::Eqs))
+                .then(variant.clone())
+                .then(just(Token::Pipe)
+                      .ignore_then(variant.clone())
+                      .repeated())
+                .map(|((name, hd), mut tl)| {
+                    tl.insert(0, hd);
+                    Statement::TypeDef(name, tl.into_iter().collect())
+                })
+                .then_ignore(just(Token::Semicolon)));
 
         let block = just(Token::LBrace)
             .ignore_then(statement.repeated())
@@ -113,8 +153,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then(just(Token::Comma).ignore_then(expr.clone()).repeated())
             .then_ignore(just(Token::Rpar))
             .map(|(e, es)| {
-                let mut terms = Vec::new();
-                terms.push(e);
+                let mut terms = vec![e];
                 terms.extend(es);
 
                 Expr::Tuple(terms)
@@ -177,11 +216,10 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
             .foldl(|l, (f, r)| f(l, r));
 
-        let apps = eqs
+        eqs
             .clone()
             .then(eqs.repeated())
-            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)));
-        apps
+            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)))
     })
     .then_ignore(end())
 }

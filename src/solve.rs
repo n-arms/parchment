@@ -102,6 +102,8 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
             }
             Ok(s)
         }
+        (Type::Defined(dt1), Type::Defined(dt2)) if dt1 == dt2 =>
+            Ok(Substitution::new()),
         (l, r) => Err(TypeError::TypeMismatch(l.clone(), r.clone())),
     }
 }

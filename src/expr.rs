@@ -104,6 +104,7 @@ pub enum Operator {
 pub enum Statement<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     Let(Pattern<V>, Expr<V>),
     Raw(Expr<V>),
+    TypeDef(V, HashSet<Variant>)
 }
 
 impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<V> {
@@ -204,6 +205,7 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Disp
         match self {
             Statement::Raw(r) => r.fmt(f),
             Statement::Let(p, e) => write!(f, "let {} = {}", p, e),
+            Statement::TypeDef(tn, vs) => write!(f, "type {} = {:?}", tn, vs),
         }
     }
 }

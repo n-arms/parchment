@@ -11,15 +11,14 @@ mod types;
 mod wasm;
 
 use codegen::emit_program;
-use gen::generate;
-use im::HashSet;
+use gen::{GenState, generate};
 use lift::{lift, ConstructorEnv};
 use parser::parse;
 use solve::solve;
 use std::fs::write;
 use std::io::{self, BufRead};
 use std::process::{Command, Output};
-use types::{Apply, Constructor, Type, VarSet, Variant};
+use types::{Apply, Constructor, Type, VarSet};
 use wasm::WATFormatter;
 
 fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
@@ -56,7 +55,7 @@ fn process_text(lines: String, state: &ReplState) {
     };
 
     let tvs = VarSet::default();
-    let (a, c, t) = match generate(&ast, &tvs, HashSet::new()) {
+    let (a, c, t) = match generate(&ast, &GenState::default()) {
         Ok(s) => s,
         Err(e) => {
             println!("{:?}", e);
