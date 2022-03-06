@@ -13,7 +13,7 @@ macro_rules! make_bin {
 }
 
 use super::expr::{Expr, Operator, Pattern, Statement};
-use super::types::{Type, Variant, Constructor};
+use super::types::{Type, Variant, unit_type, num_type, bool_type};
 use super::token::Token;
 use chumsky::prelude::*;
 
@@ -53,8 +53,8 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
         );
 
         let type_constructor = select!(
-            Token::Constructor(c) if &c == "Num" => Type::Constructor(Constructor::Number),
-            Token::Constructor(c) if &c == "Bool" => Type::Constructor(Constructor::Boolean)
+            Token::Constructor(c) if &c == "Num" => num_type(),
+            Token::Constructor(c) if &c == "Bool" => bool_type()
         );
 
         let typ = recursive(|typ| {
@@ -167,9 +167,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
                 .or(block)
                 .or(if_)
                 .or(tuple)
-                .or(constructor
-                    .then(atom.clone().repeated())
-                    .map(|(c, es)| Expr::Construction(c, es)))
+                .or(constructor.map(Expr::Constructor))
                 .or(variable.map(Expr::Variable))
         });
 

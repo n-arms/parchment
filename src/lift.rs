@@ -56,10 +56,10 @@ fn free(e: &expr::Expr<String>) -> HashSet<String> {
     match e {
         expr::Expr::Function(p, b) => free(b).relative_complement(p.bound_vars()),
         expr::Expr::Application(e1, e2) => free(e1).union(free(e2)),
-        expr::Expr::Operator(_) | expr::Expr::Number(_) | expr::Expr::Boolean(_) => HashSet::new(),
+        expr::Expr::Constructor(_) | expr::Expr::Operator(_) | expr::Expr::Number(_) | expr::Expr::Boolean(_) => HashSet::new(),
         expr::Expr::Variable(v) => HashSet::unit(v.clone()),
         expr::Expr::Record(r) => r.values().flat_map(free).collect(),
-        expr::Expr::Tuple(es) | expr::Expr::Construction(_, es) => {
+        expr::Expr::Tuple(es) => {
             es.iter().flat_map(free).collect()
         }
         expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
@@ -138,21 +138,7 @@ pub fn lift(
     cons: &mut ConstructorEnv,
 ) -> Result<Program, ()> {
     match e {
-        expr::Expr::Construction(c, es) => {
-            let mut defs = Vec::new();
-            let mut terms = vec![Expr::Integer(cons.get_or_intern(c) as i64)];
-
-            for e in es {
-                let Program { defs: d, main } = lift(e, current_env, v, fun, cons)?;
-                defs.extend(d);
-                terms.push(main);
-            }
-
-            Ok(Program {
-                defs,
-                main: Expr::Record(terms),
-            })
-        }
+        expr::Expr::Constructor(c) => todo!(),
         expr::Expr::Function(p, b) => {
             let (defs, ptr, env) = lift_function(p, b, None, current_env, v, fun, cons)?;
 

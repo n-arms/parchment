@@ -1,11 +1,11 @@
-use super::gen::{Constraint, Result, TypeError};
+use super::gen::{Constraint, Result, TypeError, GenState};
 use super::types::{combine, Apply, Free, Substitution, Type, TypeVar, TypeVarSet};
 use im::{HashMap, HashSet};
 
 /// solve a given set of constraints, producing a substitution
 ///
 /// runs in O(n^2) time though there is probably an O(n log n) algorithm
-pub fn solve(cs: HashSet<Constraint>, t: &TypeVarSet) -> Result<Substitution> {
+pub fn solve(cs: HashSet<Constraint>, t: &GenState) -> Result<Substitution> {
     if cs.is_empty() {
         return Ok(Substitution::default());
     }
@@ -102,8 +102,6 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
             }
             Ok(s)
         }
-        (Type::Defined(dt1), Type::Defined(dt2)) if dt1 == dt2 =>
-            Ok(Substitution::new()),
         (l, r) => Err(TypeError::TypeMismatch(l.clone(), r.clone())),
     }
 }

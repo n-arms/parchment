@@ -4,6 +4,7 @@ use im::hashmap::HashMap;
 use im::hashset::HashSet;
 use std::cell::Cell;
 use std::fmt;
+use super::gen::GenState;
 
 pub type TypeVar = String;
 pub type TypeEnv = HashMap<String, Scheme>;
@@ -47,24 +48,27 @@ pub type TypeVarSet = VarSet<String>;
 pub enum Type {
     Variable(TypeVar),
     Arrow(Box<Type>, Box<Type>),
-    Constructor(Constructor),
+    Constructor(String),
     Record(HashMap<String, Type>),
     Tuple(Vec<Type>),
-    OneOf(Vec<Variant>),
-    Defined(String)
+}
+
+pub fn num_type() -> Type {
+    Type::Constructor(String::from("Num"))
+}
+
+pub fn bool_type() -> Type {
+    Type::Constructor(String::from("Bool"))
+}
+
+pub fn unit_type() -> Type {
+    Type::Constructor(String::from("Unit"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variant {
     pub name: String,
     pub fields: Vec<Type>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Constructor {
-    Boolean,
-    Number,
-    Unit,
 }
 
 impl Type {
@@ -85,10 +89,6 @@ impl Type {
             Type::Constructor(_) => false,
             Type::Record(r) => r.values().any(|t| t.contains(v)),
             Type::Tuple(t) => t.iter().any(|t| t.contains(v)),
-            Type::OneOf(ts) => ts
-                .iter()
-                .any(|Variant { fields, .. }| fields.iter().any(|t| t.contains(v))),
-            Type::Defined(_) => false,
         }
     }
 }
@@ -109,15 +109,6 @@ impl Apply for Type {
                     .collect(),
             ),
             Type::Tuple(t) => Type::Tuple(t.iter().map(|t| t.apply(s.clone())).collect()),
-            Type::OneOf(ts) => Type::OneOf(
-                ts.iter()
-                    .map(|Variant { fields, name }| Variant {
-                        name: name.clone(),
-                        fields: fields.iter().map(|t| t.apply(s.clone())).collect(),
-                    })
-                    .collect(),
-            ),
-            Type::Defined(t) => Type::Defined(t.clone())
         }
     }
 }
@@ -130,15 +121,10 @@ impl Free for Type {
     fn free_type_vars(&self) -> HashSet<TypeVar> {
         match self {
             Type::Variable(v) => HashSet::unit(v.clone()),
-            Type::Defined(_) | Type::Constructor(_) => HashSet::new(),
             Type::Arrow(e1, e2) => e1.free_type_vars().union(e2.free_type_vars()),
             Type::Record(r) => r.values().flat_map(Free::free_type_vars).collect(),
             Type::Tuple(t) => t.iter().flat_map(Free::free_type_vars).collect(),
-            Type::OneOf(us) => us
-                .iter()
-                .flat_map(|Variant { fields, .. }| fields)
-                .flat_map(Free::free_type_vars)
-                .collect(),
+            Type::Constructor(_) => HashSet::new()
         }
     }
 }
@@ -154,15 +140,7 @@ impl fmt::Display for Type {
         match self {
             Type::Variable(v) => write!(f, "{}", v),
             Type::Arrow(l, r) => write!(f, "({} -> {})", *l, *r),
-            Type::Constructor(c) => write!(
-                f,
-                "{}",
-                match c {
-                    Constructor::Boolean => "Bool",
-                    Constructor::Number => "Num",
-                    Constructor::Unit => "Unit",
-                }
-            ),
+            Type::Constructor(c) => c.fmt(f),
             Type::Record(r) => {
                 write!(f, "{{")?;
                 for (i, (val, var)) in r.iter().enumerate() {
@@ -185,25 +163,6 @@ impl fmt::Display for Type {
                 write!(f, ")")?;
                 Ok(())
             }
-            Type::OneOf(us) => {
-                write!(f, "[")?;
-                for (i, Variant {fields, name}) in us.iter().enumerate() {
-                    write!(f, "{}(", name)?;
-                    for (i, field) in fields.iter().enumerate() {
-                        write!(f, "{}", field)?;
-                        if i != fields.len() - 1 {
-                            write!(f, ", ")?;
-                        }
-                    }
-                    write!(f, ")")?;
-                    if i != us.len() - 1 {
-                        write!(f, " | ")?;
-                    }
-                }
-                write!(f, "]")?;
-                Ok(())
-            }
-            Type::Defined(dt) => dt.fmt(f)
         }
     }
 }
@@ -212,7 +171,7 @@ impl fmt::Display for Type {
 pub struct Scheme(pub HashSet<String>, pub Type);
 
 impl Scheme {
-    pub fn instantiate(&self, free: &TypeVarSet) -> Type {
+    pub fn instantiate(&self, free: &GenState) -> Type {
         let new_tvs = self
             .0
             .iter()
@@ -246,7 +205,7 @@ mod test {
     #[test]
     fn free_tv_mono() {
         assert_eq!(
-            Type::Constructor(Constructor::Number).free_type_vars(),
+            NUM.free_type_vars(),
             HashSet::new()
         );
         assert_eq!(

@@ -18,7 +18,7 @@ use solve::solve;
 use std::fs::write;
 use std::io::{self, BufRead};
 use std::process::{Command, Output};
-use types::{Apply, Constructor, Type, VarSet};
+use types::{Apply, Type, VarSet};
 use wasm::WATFormatter;
 
 fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
@@ -54,8 +54,8 @@ fn process_text(lines: String, state: &ReplState) {
         }
     };
 
-    let tvs = VarSet::default();
-    let (a, c, t) = match generate(&ast, &GenState::default()) {
+    let st = GenState::default();
+    let (a, c, t) = match generate(&ast, &st) {
         Ok(s) => s,
         Err(e) => {
             println!("{:?}", e);
@@ -78,7 +78,7 @@ fn process_text(lines: String, state: &ReplState) {
         return;
     }
 
-    let s = match solve(c.iter().cloned().collect(), &tvs) {
+    let s = match solve(c.iter().cloned().collect(), &st) {
         Ok(cs) => cs,
         Err(e) => {
             println!("{:?}", e);
@@ -161,11 +161,11 @@ fn process_text(lines: String, state: &ReplState) {
         "= {}",
         match final_type {
             Type::Arrow(_, _) => String::from("<fun>"),
-            Type::Constructor(Constructor::Number) =>
+            Type::Constructor(c) if c == "Num" =>
                 f64::from_ne_bytes(num.to_ne_bytes()).to_string(),
-            Type::Constructor(Constructor::Boolean) =>
+            Type::Constructor(c) if c == "Bool" =>
                 String::from(if num == 0 { "false" } else { "true" }),
-            Type::Constructor(Constructor::Unit) => String::from("()"),
+            Type::Constructor(c) if c == "Unit" => String::from("()"),
             _ => {
                 println!("I don't know how to display the type {}", final_type);
                 return;

@@ -45,11 +45,11 @@ pub struct GenState {
 }
 
 impl GenState {
-    fn fresh(&self) -> TypeVar {
+    pub fn fresh(&self) -> TypeVar {
         self.tvs.fresh()
     }
 
-    fn add_mono_tv(&self, tv: TypeVar) -> Self {
+    pub fn add_mono_tv(&self, tv: TypeVar) -> Self {
         GenState {
             tvs: self.tvs.clone(),
             mono_tvs: self.mono_tvs.update(tv),
@@ -58,7 +58,7 @@ impl GenState {
         }
     }
 
-    fn add_type_def(&self, type_name: String, variants: HashSet<Variant>) -> Self {
+    pub fn add_type_def(&self, type_name: String, variants: HashSet<Variant>) -> Self {
         let mut new_variants = self.variants.clone();
         for Variant {name, ..} in &variants {
             new_variants.insert(name.clone(), type_name.clone());
@@ -72,17 +72,22 @@ impl GenState {
     }
 
     /// get the type and the signature of a given variant
-    fn lookup_variant(&self, name: &str) -> Option<(String, Variant)> {
+    pub fn lookup_variant(&self, name: &str) -> Option<(String, Variant)> {
         let type_name = self.variants.get(name)?;
         let variant = self.types.get(type_name)?.iter().find(|v| v.name == name)?;
         Some((type_name.clone(), variant.clone()))
+    }
+
+    pub fn variant_signature(&self, name: &str) -> Option<Type> {
+        let (name, Variant {fields, ..}) = self.lookup_variant(name)?;
+        Some(fields.into_iter().rev().fold(Type::Constructor(name), |ts, t| Type::Arrow(Box::new(t), Box::new(ts))))
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TypeError {
     InfiniteType(Type, String),
-    ConstructorMismatch(Constructor, Constructor),
+    ConstructorMismatch(String, String),
     MissingField(String),
     NoSolvableConstraints,
     TypeMismatch(Type, Type),
@@ -130,7 +135,7 @@ pub fn generate(
         // some kind of "gen bindings" function on patterns that produces both a map from variables
         // to type vars, as well as the overall type of the pattern
         Expr::Function(p, b) => {
-            let (bindings, tp) = p.type_pattern(&st.tvs);
+            let (bindings, tp) = p.type_pattern(st)?;
             let (mut a1, c1, t1) = generate(
                 b, 
                 &bindings.values().fold(st.clone(), |st, tv| st.add_mono_tv(tv.clone()))
@@ -153,12 +158,12 @@ pub fn generate(
         Expr::Number(_) => Ok((
             HashSet::new(),
             Vec::new(),
-            Type::Constructor(Constructor::Number),
+            num_type(),
         )),
         Expr::Boolean(_) => Ok((
             HashSet::new(),
             Vec::new(),
-            Type::Constructor(Constructor::Boolean),
+            bool_type()
         )),
         Expr::If(pred, cons, altr) => {
             let (a1, c1, t1) = generate(pred, st)?;
@@ -167,7 +172,7 @@ pub fn generate(
 
             let mut c4 = vec![
                 Constraint::Equality(t2, t3.clone()),
-                Constraint::Equality(t1, Type::Constructor(Constructor::Boolean)),
+                Constraint::Equality(t1, bool_type()),
             ];
             c4.extend(c1);
             c4.extend(c2);
@@ -207,35 +212,14 @@ pub fn generate(
 
             Ok((a, cs, Type::Tuple(ts)))
         }
-        Expr::Construction(c, es) => {
-            let mut a = HashSet::new();
-            let mut cs = Vec::new();
-            let mut ts = Vec::new();
-
-            for e in es {
-                let (a1, c1, t1) = generate(e, st)?;
-                a.extend(a1);
-                cs.extend(c1);
-                ts.push(t1);
-            }
-
-            let (type_def, variant) = st.lookup_variant(c).ok_or_else(|| TypeError::UnknownVariant(c.clone()))?;
-            let (with_args, without_args) = variant.fields.split_at(ts.len());
-
-            for (t1, t2) in with_args.iter().cloned().zip(ts.into_iter()) {
-                cs.push(Constraint::Equality(t1, t2));
-            }
-
-            let mut final_type = Type::Defined(type_def);
-
-            for t in without_args.iter().rev() {
-                final_type = Type::Arrow(Box::new(t.clone()), Box::new(final_type));
-            }
-
+        Expr::Constructor(c) => {
+            let b = st.fresh();
+            let t = 
+                st.variant_signature(c).ok_or_else(|| TypeError::UnknownVariant(c.clone()))?;
             Ok((
-                a,
-                cs,
-                final_type
+                HashSet::new(),
+                vec![Constraint::InstanceOf(Type::Variable(b.clone()), HashSet::new(), t)],
+                Type::Variable(b)
             ))
         }
         Expr::Operator(o) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
@@ -244,8 +228,8 @@ pub fn generate(
 }
 
 fn gen_op(o: &Operator) -> Type {
-    let num = Box::new(Type::Constructor(Constructor::Number));
-    let boolean = Box::new(Type::Constructor(Constructor::Boolean));
+    let num = Box::new(num_type());
+    let boolean = Box::new(bool_type());
     match o {
         Operator::GreaterThan
         | Operator::GreaterThanEqual
@@ -265,7 +249,7 @@ pub fn gen_block(
     if let Some(fst) = b.get(0) {
         match fst {
             Statement::Let(p, body) => {
-                let (bindings, tp) = p.type_pattern(&st.tvs);
+                let (bindings, tp) = p.type_pattern(st)?;
                 let (mut a1, c1, t1) = generate(body, st)?;
                 let (mut a2, c2, t2) = gen_block(&b[1..], st)?;
 
@@ -323,7 +307,7 @@ pub fn gen_block(
         Ok((
             HashSet::new(),
             Vec::new(),
-            Type::Constructor(Constructor::Unit),
+            unit_type()
         ))
     }
 }

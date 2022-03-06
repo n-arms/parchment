@@ -1,4 +1,5 @@
 use super::types::{Type, TypeVar, TypeVarSet, Variant};
+use super::gen::{TypeError, GenState};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
@@ -14,50 +15,40 @@ pub enum Pattern<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::H
 
 impl Pattern<String> {
     /// create a mapping from type vars to types, and return a type representing the pattern
-    pub fn type_pattern(&self, t: &TypeVarSet) -> (HashMap<String, TypeVar>, Type) {
+    pub fn type_pattern(&self, st: &GenState) -> Result<(HashMap<String, TypeVar>, Type), TypeError> {
         match self {
             Pattern::Variable(v) => {
-                let b = t.fresh();
-                (HashMap::unit(v.clone(), b.clone()), Type::Variable(b))
+                let b = st.fresh();
+                Ok((HashMap::unit(v.clone(), b.clone()), Type::Variable(b)))
             }
             Pattern::Record(r) => {
-                let (b, t) = r
-                    .iter()
-                    .map(|(var, val)| (var.clone(), val.type_pattern(t)))
-                    .fold(
-                        (HashMap::new(), HashMap::new()),
-                        |(mut bs, mut ts), (var, (b, t))| {
-                            bs.extend(b);
-                            ts.insert(var, t);
-                            (bs, ts)
-                        },
-                    );
-                (b, Type::Record(t))
+                let mut bindings = HashMap::new();
+                let mut record = HashMap::new();
+                for (var, val) in r {
+                    let (b, t) = val.type_pattern(st)?;
+                    bindings.extend(b);
+                    record.insert(var.clone(), t);
+                }
+                Ok((bindings, Type::Record(record)))
             }
             Pattern::Tuple(ps) => {
                 let mut bindings = HashMap::new();
                 let mut terms = Vec::new();
                 for p in ps {
-                    let (b1, p1) = p.type_pattern(t);
+                    let (b1, p1) = p.type_pattern(st)?;
                     bindings.extend(b1);
                     terms.push(p1);
                 }
-                (bindings, Type::Tuple(terms))
+                Ok((bindings, Type::Tuple(terms)))
             }
             Pattern::Construction(name, ps) => {
                 let mut bindings = HashMap::new();
-                let mut terms = Vec::new();
+                let (name, Variant {fields, ..}) = st.lookup_variant(name).ok_or_else(|| TypeError::UnknownVariant(name.clone()))?;
                 for p in ps {
-                    let (b1, p1) = p.type_pattern(t);
+                    let (b1, p1) = p.type_pattern(st)?;
                     bindings.extend(b1);
-                    terms.push(p1);
                 }
-                (bindings, Type::OneOf(vec![
-                    Variant {
-                        name: name.clone(),
-                        fields: terms
-                    }
-                ]))
+                Ok((bindings, Type::Constructor(name)))
             }
         }
     }
@@ -85,7 +76,7 @@ pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
     Match(Box<Expr<V>>, Vec<(Pattern<V>, Expr<V>)>),
     Block(Vec<Statement<V>>),
     Tuple(Vec<Expr<V>>),
-    Construction(V, Vec<Expr<V>>),
+    Constructor(V),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -117,9 +108,9 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<
                     false
                 }
             }
-            Expr::Construction(c1, es1) => {
-                if let Expr::Construction(c2, es2) = other {
-                    c1 == c2 && es1 == es2
+            Expr::Constructor(c1) => {
+                if let Expr::Constructor(c2) = other {
+                    c1 == c2
                 } else {
                     false
                 }
@@ -268,12 +259,7 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
                 acc
             })
         ),
-        Expr::Construction(c, es) => format!(
-            "{}{}",
-            c,
-            es.iter()
-                .fold(String::new(), |acc, e| acc + " " + &show_expr(margin, e))
-        ),
+        Expr::Constructor(c) => c.to_string(),
         Expr::If(p, e1, e2) => format!(
             "if {}\n{}  then {}\n{}  else {}",
             show_expr(margin, p),
