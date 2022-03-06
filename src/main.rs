@@ -40,6 +40,7 @@ fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
 
 pub struct ReplState {
     type_debug: bool,
+    lift_debug: bool,
     eval: bool,
 }
 
@@ -55,7 +56,7 @@ fn process_text(lines: String, state: &ReplState) {
     };
 
     let st = GenState::default();
-    let (a, c, t) = match generate(&ast, &st) {
+    let (a, c, ast) = match generate(&ast, &st) {
         Ok(s) => s,
         Err(e) => {
             println!("{:?}", e);
@@ -67,7 +68,7 @@ fn process_text(lines: String, state: &ReplState) {
         for cons in &c {
             println!("\t{}", cons);
         }
-        println!("\nbase type\n\t{}", t);
+        println!("\nbase type\n\t{}", ast.get_type());
     }
 
     if !a.is_empty() {
@@ -94,8 +95,8 @@ fn process_text(lines: String, state: &ReplState) {
         println!();
     }
 
-    let final_type = t.apply(s);
-    println!(":: {}", final_type);
+    let final_expr = ast.apply(s);
+    println!(":: {}", final_expr.get_type());
 
     if !state.eval {
         return;
@@ -111,6 +112,10 @@ fn process_text(lines: String, state: &ReplState) {
         Ok(l) => l,
         Err(()) => return,
     };
+
+    if state.lift_debug {
+        println!("{:#?}", lifted);
+    }
 
     let wasm = emit_program(lifted);
     let mut w = WATFormatter::default();
@@ -159,7 +164,7 @@ fn process_text(lines: String, state: &ReplState) {
 
     println!(
         "= {}",
-        match final_type {
+        match final_expr.get_type() {
             Type::Arrow(_, _) => String::from("<fun>"),
             Type::Constructor(c) if c == "Num" =>
                 f64::from_ne_bytes(num.to_ne_bytes()).to_string(),
@@ -167,7 +172,7 @@ fn process_text(lines: String, state: &ReplState) {
                 String::from(if num == 0 { "false" } else { "true" }),
             Type::Constructor(c) if c == "Unit" => String::from("()"),
             _ => {
-                println!("I don't know how to display the type {}", final_type);
+                println!("I don't know how to display the type {}", final_expr.get_type());
                 return;
             }
         }
@@ -179,6 +184,7 @@ fn main() -> io::Result<()> {
     let mut lines = stdin.lock().lines().map(Result::unwrap);
     let mut state = ReplState {
         type_debug: false,
+        lift_debug: false,
         eval: true,
     };
     loop {
@@ -199,6 +205,8 @@ fn main() -> io::Result<()> {
         match &stripped[..] {
             "+typedebug" => state.type_debug = true,
             "-typedebug" => state.type_debug = false,
+            "+liftdebug" => state.lift_debug = true,
+            "-liftdebug" => state.lift_debug = false,
             "+eval" => state.eval = true,
             "-eval" => state.eval = false,
             "quit" => {
@@ -209,5 +217,96 @@ fn main() -> io::Result<()> {
                 process_text(read_ast(next, &mut lines), &state);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn eval(text: &str) -> u64 {
+        let untyped = parse(&lexer::scan(text)).unwrap();
+        let state = GenState::default();
+        let (a, cs, partial_typed) = generate(&untyped, &state).unwrap();
+        assert!(a.is_empty());
+        let sub = solve(cs.into_iter().collect(), &state).unwrap();
+        let typed = partial_typed.apply(sub);
+        let lifted = lift(
+            &typed,
+            &[],
+            &VarSet::default(),
+            &VarSet::default(),
+            &mut ConstructorEnv::default(),
+        ).unwrap();
+        let wat = emit_program(lifted);
+        let mut fmt = WATFormatter::default();
+        wat.format(&mut fmt);
+
+        write("./temp.wat", fmt.to_string()).unwrap();
+        assert!(Command::new("wat2wasm").arg("./temp.wat").spawn().unwrap().wait().unwrap().success());
+        let Output {status, stdout, ..} = Command::new("node").arg("runwasm.js").output().unwrap();
+        assert!(status.success());
+
+        stdout
+            .into_iter()
+            .fold(0, |total, digit| total * 10 + (digit as u64 - 48))
+    }
+
+    fn cast_f64(num: u64) -> f64 {
+        f64::from_ne_bytes(num.to_ne_bytes())
+    }
+
+    fn cast_bool(num: u64) -> bool {
+        num != 0
+    }
+
+    #[test]
+    fn full_stack() {
+        assert_eq!(
+            6.,
+            cast_f64(eval(r#"
+                {
+                    let sub1 = fn x -> x - 1;
+                    let is_zero = fn x -> x <= 0.01;
+                    let fact = fn x -> if is_zero x then 1 else x * (fact (sub1 x));
+                    if (is_zero (sub1 42)) then 3 else (fact 3);
+                }
+            "#))
+        );
+
+        assert_eq!(
+            12.,
+            cast_f64(eval(r#"
+                {
+                    let {a:(x, y), b:z} = {a: (3, 4), b: 5};
+                    x + y + z;
+                }
+            "#))
+        );
+
+        assert_eq!(
+            false,
+            cast_bool(eval(r#"
+                {
+                    let is_zero = fn x -> x <= 0.01;
+                    let not = fn x -> if x then false else true;
+                    let sub1 = fn x -> x - 1;
+                    let is_even = fn x -> if is_zero x then true else not (is_even (sub1 x));
+                    is_even 7;
+                }
+            "#))
+        );
+
+        assert_eq!(
+            0.,
+            cast_f64(eval(r#"
+                {
+                    type maybe = Just a | Nothing;
+                    Just 5;
+                    Just true;
+                    0;
+                }
+            "#))
+        );
     }
 }

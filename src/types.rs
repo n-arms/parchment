@@ -5,6 +5,7 @@ use im::hashset::HashSet;
 use std::cell::Cell;
 use std::fmt;
 use super::gen::GenState;
+use super::expr::{Statement, Expr};
 
 pub type TypeVar = String;
 pub type TypeEnv = HashMap<String, Scheme>;
@@ -113,6 +114,35 @@ impl Apply for Type {
     }
 }
 
+impl Apply for Expr<Type> {
+    fn apply(&self, s: Substitution) -> Self {
+        match self {
+            Expr::Function(pattern, body, pattern_type) => Expr::Function(pattern.clone(), Box::new(body.apply(s.clone())), pattern_type.apply(s)),
+            Expr::Application(left, right, app_type) => Expr::Application(Box::new(left.apply(s.clone())), Box::new(right.apply(s.clone())), app_type.apply(s)),
+            Expr::Number(_) |
+            Expr::Boolean(_) => self.clone(),
+            Expr::Operator(op, op_type) => Expr::Operator(*op, op_type.apply(s)),
+            Expr::Variable(var, var_type) => Expr::Variable(var.clone(), var_type.apply(s)),
+            Expr::Record(record) => Expr::Record(record.iter().map(|(var, val)| (var.clone(), val.apply(s.clone()))).collect()),
+            Expr::If(pred, con, alt) => Expr::If(Box::new(pred.apply(s.clone())), Box::new(con.apply(s.clone())), Box::new(alt.apply(s))),
+            Expr::Block(block) => Expr::Block(block.iter().map(|statement| statement.apply(s.clone())).collect()),
+            Expr::Tuple(tuple) => Expr::Tuple(tuple.iter().map(|expr| expr.apply(s.clone())).collect()),
+            Expr::Constructor(cons, cons_type) => Expr::Constructor(cons.clone(), cons_type.apply(s)),
+            Expr::Match(_, _) => todo!(),
+        }
+    }
+}
+
+impl Apply for Statement<Type> {
+    fn apply(&self, s: Substitution) -> Self {
+        match self {
+            Statement::Let(pattern, body, pattern_type) => Statement::Let(pattern.clone(), body.apply(s.clone()), pattern_type.apply(s)),
+            Statement::Raw(expr) => Statement::Raw(expr.apply(s)),
+            Statement::TypeDef(_, _) => self.clone(),
+        }
+    }
+}
+
 pub trait Free {
     fn free_type_vars(&self) -> HashSet<TypeVar>;
 }
@@ -205,7 +235,7 @@ mod test {
     #[test]
     fn free_tv_mono() {
         assert_eq!(
-            NUM.free_type_vars(),
+            num_type().free_type_vars(),
             HashSet::new()
         );
         assert_eq!(

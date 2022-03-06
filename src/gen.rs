@@ -97,31 +97,31 @@ pub enum TypeError {
 pub type Result<A> = std::result::Result<A, TypeError>;
 
 pub fn generate(
-    e: &Expr<String>,
+    e: &Expr<()>,
     st: &GenState
-) -> Result<(HashSet<Assumption>, Vec<Constraint>, Type)> {
+) -> Result<(HashSet<Assumption>, Vec<Constraint>, Expr<Type>)> {
     match e {
-        Expr::Variable(v) => {
+        Expr::Variable(var, ()) => {
             let b = st.fresh();
             Ok((
-                HashSet::unit((v.clone(), b.clone())),
+                HashSet::unit((var.clone(), b.clone())),
                 Vec::new(),
-                Type::Variable(b),
+                Expr::Variable(var.clone(), Type::Variable(b))
             ))
         }
-        Expr::Application(e1, e2) => {
+        Expr::Application(e1, e2, ()) => {
             let b = st.fresh();
             let (a1, c1, t1) = generate(e1, st)?;
             let (a2, c2, t2) = generate(e2, st)?;
 
             let mut c3 = vec![Constraint::Equality(
-                t1,
-                Type::Arrow(Box::new(t2), Box::new(Type::Variable(b.clone()))),
+                t1.get_type(),
+                Type::Arrow(Box::new(t2.get_type()), Box::new(Type::Variable(b.clone()))),
             )];
             c3.extend(c1);
             c3.extend(c2);
 
-            Ok((a1.union(a2), c3, Type::Variable(b)))
+            Ok((a1.union(a2), c3, Expr::Application(Box::new(t1), Box::new(t2), Type::Variable(b))))
         }
         // construct a fresh type var for every variable in the pattern
         // run generation for the body
@@ -134,10 +134,10 @@ pub fn generate(
         //
         // some kind of "gen bindings" function on patterns that produces both a map from variables
         // to type vars, as well as the overall type of the pattern
-        Expr::Function(p, b) => {
-            let (bindings, tp) = p.type_pattern(st)?;
+        Expr::Function(pattern, body, ()) => {
+            let (bindings, tp) = pattern.type_pattern(st)?;
             let (mut a1, c1, t1) = generate(
-                b, 
+                body, 
                 &bindings.values().fold(st.clone(), |st, tv| st.add_mono_tv(tv.clone()))
             )?;
             let mut c2: Vec<_> = a1
@@ -152,18 +152,21 @@ pub fn generate(
                 .collect();
             c2.extend(c1);
             a1.retain(|(var, _)| !bindings.contains_key(var));
-            Ok((a1, c2, Type::Arrow(Box::new(tp), Box::new(t1))))
+            Ok((a1, c2, Expr::Function(pattern.clone(), Box::new(t1), tp)))
         }
-        Expr::Block(b) => gen_block(&b[..], st),
-        Expr::Number(_) => Ok((
+        Expr::Block(b) => {
+            let (a, c, s) = gen_block(&b[..], st)?;
+            Ok((a, c, Expr::Block(s)))
+        }
+        Expr::Number(n) => Ok((
             HashSet::new(),
             Vec::new(),
-            num_type(),
+            Expr::Number(*n)
         )),
-        Expr::Boolean(_) => Ok((
+        Expr::Boolean(b) => Ok((
             HashSet::new(),
             Vec::new(),
-            bool_type()
+            Expr::Boolean(*b)
         )),
         Expr::If(pred, cons, altr) => {
             let (a1, c1, t1) = generate(pred, st)?;
@@ -171,8 +174,8 @@ pub fn generate(
             let (a3, c3, t3) = generate(altr, st)?;
 
             let mut c4 = vec![
-                Constraint::Equality(t2, t3.clone()),
-                Constraint::Equality(t1, bool_type()),
+                Constraint::Equality(t2.get_type(), t3.get_type()),
+                Constraint::Equality(t1.get_type(), bool_type()),
             ];
             c4.extend(c1);
             c4.extend(c2);
@@ -182,7 +185,7 @@ pub fn generate(
             a4.extend(a2);
             a4.extend(a3);
 
-            Ok((a4, c4, t3))
+            Ok((a4, c4, Expr::If(Box::new(t1), Box::new(t2), Box::new(t3))))
         }
         Expr::Record(r) => {
             let mut a = HashSet::new();
@@ -196,7 +199,7 @@ pub fn generate(
                 ts.insert(var.clone(), t1);
             }
 
-            Ok((a, cs, Type::Record(ts)))
+            Ok((a, cs, Expr::Record(ts)))
         }
         Expr::Tuple(es) => {
             let mut a = HashSet::new();
@@ -210,48 +213,48 @@ pub fn generate(
                 ts.push(t1);
             }
 
-            Ok((a, cs, Type::Tuple(ts)))
+            Ok((a, cs, Expr::Tuple(ts)))
         }
-        Expr::Constructor(c) => {
+        Expr::Constructor(cons, ()) => {
             let b = st.fresh();
             let t = 
-                st.variant_signature(c).ok_or_else(|| TypeError::UnknownVariant(c.clone()))?;
+                st.variant_signature(cons).ok_or_else(|| TypeError::UnknownVariant(cons.clone()))?;
             Ok((
                 HashSet::new(),
-                vec![Constraint::InstanceOf(Type::Variable(b.clone()), HashSet::new(), t)],
-                Type::Variable(b)
+                vec![Constraint::InstanceOf(Type::Variable(b.clone()), HashSet::new(), t.clone())],
+                Expr::Variable(b, t)
             ))
         }
-        Expr::Operator(o) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
+        Expr::Operator(o, ()) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
         Expr::Match(_, _) => todo!(),
     }
 }
 
-fn gen_op(o: &Operator) -> Type {
+fn gen_op(o: &Operator) -> Expr<Type> {
     let num = Box::new(num_type());
     let boolean = Box::new(bool_type());
-    match o {
+    match &o {
         Operator::GreaterThan
         | Operator::GreaterThanEqual
         | Operator::LessThan
         | Operator::LessThanEqual
-        | Operator::Equals => Type::Arrow(num.clone(), Box::new(Type::Arrow(num, boolean))),
+        | Operator::Equals => Expr::Operator(*o, Type::Arrow(num.clone(), Box::new(Type::Arrow(num, boolean)))),
         Operator::Minus | Operator::Times | Operator::Plus => {
-            Type::Arrow(num.clone(), Box::new(Type::Arrow(num.clone(), num)))
+            Expr::Operator(*o, Type::Arrow(num.clone(), Box::new(Type::Arrow(num.clone(), num))))
         }
     }
 }
 
 pub fn gen_block(
-    b: &[Statement<String>],
+    b: &[Statement<()>],
     st: &GenState
-) -> Result<(HashSet<Assumption>, Vec<Constraint>, Type)> {
+) -> Result<(HashSet<Assumption>, Vec<Constraint>, Vec<Statement<Type>>)> {
     if let Some(fst) = b.get(0) {
         match fst {
-            Statement::Let(p, body) => {
-                let (bindings, tp) = p.type_pattern(st)?;
+            Statement::Let(pattern, body, ()) => {
+                let (bindings, tp) = pattern.type_pattern(st)?;
                 let (mut a1, c1, t1) = generate(body, st)?;
-                let (mut a2, c2, t2) = gen_block(&b[1..], st)?;
+                let (mut a2, c2, s) = gen_block(&b[1..], st)?;
 
                 let mut c3: Vec<_> = a2
                     .iter()
@@ -280,17 +283,20 @@ pub fn gen_block(
 
                 c3.extend(c1);
                 c3.extend(c2);
-                c3.push(Constraint::Equality(tp, t1));
+                c3.push(Constraint::Equality(tp.clone(), t1.get_type()));
 
                 a2.retain(|(var, _)| !bindings.contains_key(var));
                 a2.extend(a1);
 
-                Ok((a2, c3, t2))
+                let mut statements = s;
+                statements.insert(0, Statement::Let(pattern.clone(), t1, tp));
+
+                Ok((a2, c3, statements))
             }
             Statement::Raw(r) => {
                 let (a1, c1, t1) = generate(r, st)?;
                 if b.len() == 1 {
-                    Ok((a1, c1, t1))
+                    Ok((a1, c1, vec![Statement::Raw(t1)]))
                 } else {
                     let (mut a2, mut c2, t2) = gen_block(&b[1..], st)?;
                     c2.extend(c1);
@@ -307,7 +313,7 @@ pub fn gen_block(
         Ok((
             HashSet::new(),
             Vec::new(),
-            unit_type()
+            todo!("add unit literals to the Expr enum")
         ))
     }
 }

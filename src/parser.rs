@@ -3,10 +3,12 @@ macro_rules! make_bin {
         (|l, r| {
             Expr::Application(
                 Box::new(Expr::Application(
-                    Box::new(Expr::Operator($op)),
+                    Box::new(Expr::Operator($op, ())),
                     Box::new(l),
+                    ()
                 )),
                 Box::new(r),
+                ()
             )
         }) as fn(_, _) -> _
     };
@@ -17,7 +19,7 @@ use super::types::{Type, Variant, unit_type, num_type, bool_type};
 use super::token::Token;
 use chumsky::prelude::*;
 
-pub fn parse(t: &[Token]) -> Result<Expr<String>, Vec<Simple<Token>>> {
+pub fn parse(t: &[Token]) -> Result<Expr<()>, Vec<Simple<Token>>> {
     parser().parse(t)
 }
 
@@ -36,7 +38,7 @@ fn record<L, R>(
     field_list.delimited_by(just(Token::LBrace), just(Token::RBrace))
 }
 
-fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
+fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
     recursive(|expr| {
         let constant = select!(
             Token::Number(n) => Expr::Number(n),
@@ -106,13 +108,13 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
             .ignore_then(pattern.clone().repeated())
             .then_ignore(just(Token::Rarrow))
             .then(expr.clone())
-            .foldr(|p, e| Expr::Function(p, Box::new(e)));
+            .foldr(|p, e| Expr::Function(p, Box::new(e), ()));
 
         let statement = just(Token::Let)
             .ignore_then(pattern)
             .then_ignore(just(Token::Eqs))
             .then(expr.clone())
-            .map(|(p, e)| Statement::Let(p, e))
+            .map(|(p, e)| Statement::Let(p, e, ()))
             .or(expr.clone().map(Statement::Raw))
             .then_ignore(just(Token::Semicolon))
             .or(just(Token::Type)
@@ -167,8 +169,8 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
                 .or(block)
                 .or(if_)
                 .or(tuple)
-                .or(constructor.map(Expr::Constructor))
-                .or(variable.map(Expr::Variable))
+                .or(constructor.map(|c| Expr::Constructor(c, ())))
+                .or(variable.map(|v| Expr::Variable(v, ())))
         });
 
         let make_times = make_bin!(Operator::Times);
@@ -217,7 +219,7 @@ fn parser() -> impl Parser<Token, Expr<String>, Error = Simple<Token>> {
         eqs
             .clone()
             .then(eqs.repeated())
-            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs)))
+            .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs), ()))
     })
     .then_ignore(end())
 }

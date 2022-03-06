@@ -108,53 +108,56 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
 
 #[cfg(test)]
 mod test {
-    use super::super::types::{Constructor, TypeVarSet};
+    use super::super::types::{bool_type, num_type};
     use super::super::{
         expr::{Expr, Pattern},
         gen::*,
         lexer::scan,
-        parser::parse_expr,
+        parser::parse,
     };
     use super::*;
     use rand::{thread_rng, Rng};
 
     fn infer(s: &str) -> Type {
-        let e = parse_expr(&scan(s)).unwrap().unwrap().0;
-        let tvs = TypeVarSet::default();
-        let (a, c, t1) = generate(&e, &tvs, HashSet::new()).unwrap();
+        let e = parse(&scan(s)).unwrap();
+        let st = GenState::default();
+        let (a, c, t1) = generate(&e, &st).unwrap();
         assert!(a.is_empty());
-        t1.apply(solve(c.into_iter().collect(), &tvs).unwrap())
+        t1.apply(solve(c.into_iter().collect(), &st).unwrap()).get_type()
     }
 
     // during early stages of testing I noticed some non-determainism arising from solving thanks
     // to the underlying hash map.
     #[test]
     fn det_solve() {
-        let mut last = None;
+        let mut last: Option<Expr<Type>> = None;
         for _ in 0..1000 {
             let v1 = thread_rng().gen::<usize>().to_string();
             let v2 = thread_rng().gen::<usize>().to_string();
             let e = Expr::Application(
                 Box::new(Expr::Function(
                     Pattern::Variable(v1.clone()),
-                    Box::new(Expr::Variable(v1.clone())),
+                    Box::new(Expr::Variable(v1.clone(), ())),
+                    ()
                 )),
                 Box::new(Expr::Function(
                     Pattern::Variable(v2.clone()),
-                    Box::new(Expr::Variable(v2.clone())),
+                    Box::new(Expr::Variable(v2.clone(), ())),
+                    ()
                 )),
+                ()
             );
-            let tvs = TypeVarSet::default();
-            let (a, c, t) = generate(&e, &tvs, HashSet::new()).unwrap();
+            let st = GenState::default();
+            let (a, c, t) = generate(&e, &st).unwrap();
             assert!(a.is_empty());
             println!("{} where", t);
             for c in &c {
                 println!("    {}", c);
             }
 
-            let new_t = t.apply(solve(c.into_iter().collect(), &tvs).unwrap());
+            let new_t = t.apply(solve(c.into_iter().collect(), &st).unwrap());
             if let Some(l) = last.as_ref() {
-                assert_eq!(l, &new_t);
+                assert_eq!(l.get_type(), new_t.get_type());
             }
             last = Some(new_t);
         }
@@ -173,8 +176,8 @@ mod test {
         let t = infer("fn x -> if x then 1 else 0");
 
         if let Type::Arrow(l, r) = t {
-            assert_eq!(l.as_ref(), &Type::Constructor(Constructor::Boolean));
-            assert_eq!(r.as_ref(), &Type::Constructor(Constructor::Number));
+            assert_eq!(l.as_ref(), &bool_type());
+            assert_eq!(r.as_ref(), &num_type());
         } else {
             panic!("the type {} should be an arrow function", t);
         }
@@ -208,6 +211,6 @@ mod test {
 
     #[test]
     fn record() {
-        infer("{x:1, y:2,}");
+        infer("{x:1, y:2}");
     }
 }

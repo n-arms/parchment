@@ -1,4 +1,4 @@
-use super::types::{Type, TypeVar, TypeVarSet, Variant};
+use super::types::{Type, TypeVar, TypeVarSet, Variant, num_type, bool_type, unit_type};
 use super::gen::{TypeError, GenState};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
@@ -6,14 +6,14 @@ use std::cmp;
 use std::fmt;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Pattern<V: Clone + fmt::Debug + cmp::PartialEq + cmp::Eq + std::hash::Hash> {
-    Variable(V),
-    Record(HashMap<V, Pattern<V>>),
-    Tuple(Vec<Pattern<V>>),
-    Construction(V, Vec<Pattern<V>>),
+pub enum Pattern {
+    Variable(String),
+    Record(HashMap<String, Pattern>),
+    Tuple(Vec<Pattern>),
+    Construction(String, Vec<Pattern>),
 }
 
-impl Pattern<String> {
+impl Pattern {
     /// create a mapping from type vars to types, and return a type representing the pattern
     pub fn type_pattern(&self, st: &GenState) -> Result<(HashMap<String, TypeVar>, Type), TypeError> {
         match self {
@@ -64,19 +64,38 @@ impl Pattern<String> {
 }
 
 #[derive(Clone, Debug)]
-pub enum Expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
-    Function(Pattern<V>, Box<Expr<V>>),
-    Application(Box<Expr<V>>, Box<Expr<V>>),
+pub enum Expr<A> {
+    /// a function with a domain of type A
+    Function(Pattern, Box<Expr<A>>, A),
+    /// an application that will return type A
+    Application(Box<Expr<A>>, Box<Expr<A>>, A),
     Number(f64),
     Boolean(bool),
-    Operator(Operator),
-    Variable(V),
-    Record(HashMap<String, Expr<V>>),
-    If(Box<Expr<V>>, Box<Expr<V>>, Box<Expr<V>>),
-    Match(Box<Expr<V>>, Vec<(Pattern<V>, Expr<V>)>),
-    Block(Vec<Statement<V>>),
-    Tuple(Vec<Expr<V>>),
-    Constructor(V),
+    Operator(Operator, A),
+    Variable(String, A),
+    Record(HashMap<String, Expr<A>>),
+    If(Box<Expr<A>>, Box<Expr<A>>, Box<Expr<A>>),
+    Match(Box<Expr<A>>, Vec<(Pattern, Expr<A>)>),
+    Block(Vec<Statement<A>>),
+    Tuple(Vec<Expr<A>>),
+    Constructor(String, A),
+}
+
+impl Expr<Type> {
+    pub fn get_type(&self) -> Type {
+        match self {
+            Expr::Function(_, body, pattern_type) => Type::Arrow(Box::new(pattern_type.clone()), Box::new(body.get_type())),
+            Expr::Application(_, _, app_type) => app_type.clone(),
+            Expr::Number(_) => num_type(),
+            Expr::Boolean(_) => bool_type(),
+            Expr::Record(record) => Type::Record(record.iter().map(|(val, var)| (val.clone(), var.get_type())).collect()),
+            Expr::If(_, expr, _) => expr.get_type(),
+            Expr::Match(_, _) => todo!(),
+            Expr::Block(block) => block.last().map(Statement::get_type).unwrap_or_else(|| unit_type()),
+            Expr::Tuple(tuple) => Type::Tuple(tuple.iter().map(|val| val.get_type()).collect()),
+            Expr::Operator(_, t) | Expr::Constructor(_, t) | Expr::Variable(_, t) => t.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Copy)]
@@ -92,24 +111,34 @@ pub enum Operator {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Statement<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> {
-    Let(Pattern<V>, Expr<V>),
-    Raw(Expr<V>),
-    TypeDef(V, HashSet<Variant>)
+pub enum Statement<A> {
+    /// a let statement with a binding of type A
+    Let(Pattern, Expr<A>, A),
+    Raw(Expr<A>),
+    TypeDef(String, HashSet<Variant>)
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<V> {
-    fn eq(&self, other: &Expr<V>) -> bool {
+impl Statement<Type> {
+    pub fn get_type(&self) -> Type {
         match self {
-            Expr::Operator(o1) => {
-                if let Expr::Operator(o2) = other {
-                    o1 == o2
+            Statement::TypeDef(..) | Statement::Let(..) => unit_type(),
+            Statement::Raw(expr) => expr.get_type(),
+        }
+    }
+}
+
+impl<A: cmp::PartialEq> cmp::PartialEq for Expr<A> {
+    fn eq(&self, other: &Expr<A>) -> bool {
+        match self {
+            Expr::Operator(o1, t1) => {
+                if let Expr::Operator(o2, t2) = other {
+                    o1 == o2 && t1 == t2
                 } else {
                     false
                 }
             }
-            Expr::Constructor(c1) => {
-                if let Expr::Constructor(c2) = other {
+            Expr::Constructor(c1, _) => {
+                if let Expr::Constructor(c2, _) = other {
                     c1 == c2
                 } else {
                     false
@@ -122,9 +151,9 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<
                     false
                 }
             }
-            Expr::Function(p, e) => {
-                if let Expr::Function(p1, e1) = other {
-                    p == p1 && e == e1
+            Expr::Function(p1, b1, _) => {
+                if let Expr::Function(p2, b2, _) = other {
+                    p1 == p2 && b1 == b2
                 } else {
                     false
                 }
@@ -136,15 +165,15 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<
                     false
                 }
             }
-            Expr::Variable(a) => {
-                if let Expr::Variable(b) = other {
+            Expr::Variable(a, _) => {
+                if let Expr::Variable(b, _) = other {
                     a == b
                 } else {
                     false
                 }
             }
-            Expr::Application(l, r) => {
-                if let Expr::Application(l1, r1) = other {
+            Expr::Application(l, r, _) => {
+                if let Expr::Application(l1, r1, _) = other {
                     l == l1 && r == r1
                 } else {
                     false
@@ -189,52 +218,52 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::PartialEq for Expr<
     }
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Display
-    for Statement<V>
+impl<A: fmt::Display> fmt::Display
+    for Statement<A>
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Statement::Raw(r) => r.fmt(f),
-            Statement::Let(p, e) => write!(f, "let {} = {}", p, e),
+            Statement::Let(pattern, body, _) => write!(f, "let {} = {}", pattern, body),
             Statement::TypeDef(tn, vs) => write!(f, "type {} = {:?}", tn, vs),
         }
     }
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> cmp::Eq for Expr<V> {}
+impl<A: cmp::Eq> cmp::Eq for Expr<A> {}
 
-fn show_tailing_fn<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display>(
+fn show_tailing_fn<A: fmt::Display>(
     margin: usize,
-    e: &Expr<V>,
+    e: &Expr<A>,
 ) -> String {
     match e {
-        Expr::Function(p, b) if matches!(b.as_ref(), Expr::Function(..)) => {
-            format!("{} {}", p, show_tailing_fn(margin, b))
+        Expr::Function(pattern, body, _) if matches!(body.as_ref(), Expr::Function(..)) => {
+            format!("{} {}", pattern, show_tailing_fn(margin, body))
         }
-        Expr::Function(p, b) => format!(
+        Expr::Function(pattern, body, _) => format!(
             "{} -> \n{}{}",
-            p,
+            pattern,
             vec![' '; margin * 2 + 2].iter().collect::<String>(),
-            show_expr(margin + 1, b)
+            show_expr(margin + 1, body)
         ),
         _ => show_expr(margin, e),
     }
 }
 
-fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt::Display>(
+fn show_expr<A: fmt::Display>(
     margin: usize,
-    e: &Expr<V>,
+    e: &Expr<A>,
 ) -> String {
     let margin_str: String = vec![' '; margin * 2].iter().collect();
     match e {
-        Expr::Application(l, r) => format!(
+        Expr::Application(l, r, _) => format!(
             "{} {}",
             format!("({})", show_expr(margin, l)),
             format!("({})", show_expr(margin, r))
         ),
         Expr::Number(n) => n.to_string(),
         Expr::Boolean(b) => b.to_string(),
-        Expr::Variable(v) => v.to_string(),
+        Expr::Variable(var, _) => var.to_string(),
         Expr::Block(ss) => format!(
             "{{\n{}{}}}",
             ss.iter().fold(String::new(), |mut acc, x| {
@@ -259,7 +288,7 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
                 acc
             })
         ),
-        Expr::Constructor(c) => c.to_string(),
+        Expr::Constructor(c, _) => c.to_string(),
         Expr::If(p, e1, e2) => format!(
             "if {}\n{}  then {}\n{}  else {}",
             show_expr(margin, p),
@@ -281,41 +310,44 @@ fn show_expr<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + ToString + fmt:
                 acc
             })
         ),
-        Expr::Operator(Operator::Equals) => String::from("=="),
-        Expr::Operator(Operator::Times) => String::from("*"),
-        Expr::Operator(Operator::Plus) => String::from("+"),
-        Expr::Operator(Operator::Minus) => String::from("-"),
-        Expr::Operator(Operator::LessThan) => String::from("<"),
-        Expr::Operator(Operator::LessThanEqual) => String::from("<="),
-        Expr::Operator(Operator::GreaterThan) => String::from(">"),
-        Expr::Operator(Operator::GreaterThanEqual) => String::from(">="),
+        Expr::Operator(o, _) => String::from(match o {
+            Operator::Plus => "+",
+            Operator::Minus => "-",
+            Operator::Times => "*",
+            Operator::Equals => "==",
+            Operator::LessThan => "<",
+            Operator::LessThanEqual => "<=",
+            Operator::GreaterThan => ">",
+            Operator::GreaterThanEqual => ">=",
+        }),
         e => format!("fn {}", show_tailing_fn(margin, e)),
     }
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Display for Expr<V> {
+impl<A: fmt::Display> fmt::Display for Expr<A> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", show_expr(0, self))
     }
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> Expr<V> {
+impl Expr<()> {
     #[allow(dead_code)]
-    fn rand(from_num: fn(usize) -> V) -> Self {
+    fn rand(from_num: fn(usize) -> String) -> Self {
         match rand::thread_rng().gen::<u8>() >> 6 {
             0 => Expr::Application(
                 Box::new(Expr::rand(from_num)),
                 Box::new(Expr::rand(from_num)),
+                ()
             ),
-            1 => Expr::Function(Pattern::rand(from_num), Box::new(Expr::rand(from_num))),
+            1 => Expr::Function(Pattern::rand(from_num), Box::new(Expr::rand(from_num)), ()),
             2 => Expr::Number(rand::thread_rng().gen()),
-            3 => Expr::Variable(from_num(rand::thread_rng().gen())),
+            3 => Expr::Variable(from_num(rand::thread_rng().gen()), ()),
             _ => panic!(),
         }
     }
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Display for Pattern<V> {
+impl fmt::Display for Pattern {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Pattern::Variable(v) => write!(f, "{}", v),
@@ -326,8 +358,8 @@ impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq + fmt::Display> fmt::Disp
     }
 }
 
-impl<V: Clone + fmt::Debug + std::hash::Hash + cmp::Eq> Pattern<V> {
-    fn rand(from_num: fn(usize) -> V) -> Self {
+impl Pattern {
+    fn rand(from_num: fn(usize) -> String) -> Self {
         Pattern::Variable(from_num(thread_rng().gen()))
     }
 }
