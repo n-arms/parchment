@@ -1,11 +1,37 @@
-use super::gen::{Constraint, Result, TypeError, GenState};
-use super::types::{combine, Apply, Free, Substitution, Type, TypeVar, TypeVarSet};
+use super::gen;
+use super::types::{Apply, Constraint, Fresh, Kind, Substitution, Type, TypeError, Var};
 use im::{HashMap, HashSet};
+use std::rc::Rc;
+
+#[derive(Debug, Clone)]
+pub struct State {
+    fresh_type_vars: Fresh,
+}
+
+impl State {
+    pub fn new(fresh_type_vars: Fresh) -> Self {
+        State { fresh_type_vars }
+    }
+
+    pub fn fresh(&self) -> Var {
+        Rc::new(self.fresh_type_vars.fresh().to_string())
+    }
+}
+
+fn combine(s1: Substitution, s2: Substitution) -> Substitution {
+    let mut s3: Substitution = s2
+        .into_iter()
+        .map(|(u, t)| (u, t.apply(&s1.clone())))
+        .collect();
+    s3.extend(s1);
+
+    s3
+}
 
 /// solve a given set of constraints, producing a substitution
 ///
 /// runs in O(n^2) time though there is probably an O(n log n) algorithm
-pub fn solve(cs: HashSet<Constraint>, t: &GenState) -> Result<Substitution> {
+pub fn solve(cs: HashSet<Constraint>, type_vars: State) -> Result<Substitution, TypeError> {
     if cs.is_empty() {
         return Ok(Substitution::default());
     }
@@ -14,29 +40,33 @@ pub fn solve(cs: HashSet<Constraint>, t: &GenState) -> Result<Substitution> {
     match c {
         Constraint::Equality(t1, t2) => {
             let su1 = unify(&t1, &t2)?;
-            let su2 = solve(cs.into_iter().map(|c| c.apply(su1.clone())).collect(), t)?;
+            let su2 = solve(cs.into_iter().map(|c| c.apply(&su1)).collect(), type_vars)?;
             Ok(combine(su2, su1))
         }
         Constraint::InstanceOf(sub, m, sup) => {
-            let sup_gen = sup.generalize(m).instantiate(t);
-            solve(cs.update(Constraint::Equality(sub, sup_gen)), t)
+            let sup_gen = sup.apply(
+                &sup.variables()
+                    .relative_complement(m)
+                    .into_iter()
+                    .map(|var| (var, Type::Variable(type_vars.fresh(), Kind::Star)))
+                    .collect(),
+            );
+            solve(cs.update(Constraint::Equality(sub, sup_gen)), type_vars)
         }
     }
 }
 
-fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constraint>)> {
+fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constraint>), TypeError> {
     for c in &cs {
         match c {
-            Constraint::Equality(..) => {
-                return Ok((c.clone(), cs.without(c)))
-            }
+            Constraint::Equality(..) => return Ok((c.clone(), cs.without(c))),
             Constraint::InstanceOf(_, m, sup) => {
                 let cs_active = cs
                     .iter()
                     .map(active_type_vars)
                     .fold(HashSet::new(), HashSet::union);
                 let is_solvable = sup
-                    .free_type_vars()
+                    .variables()
                     .relative_complement(m.clone())
                     .intersection(cs_active)
                     .is_empty();
@@ -50,36 +80,43 @@ fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constra
     Err(TypeError::NoSolvableConstraints)
 }
 
-fn active_type_vars(c: &Constraint) -> HashSet<TypeVar> {
+fn active_type_vars(c: &Constraint) -> HashSet<Var> {
     match c {
-        Constraint::Equality(t1, t2) => {
-            t1.free_type_vars().union(t2.free_type_vars())
-        }
+        Constraint::Equality(t1, t2) => t1.variables().union(t2.variables()),
         Constraint::InstanceOf(sub, m, sup) => sub
-            .free_type_vars()
-            .union(m.clone().intersection(sup.free_type_vars())),
+            .variables()
+            .union(m.clone().intersection(sup.variables())),
     }
 }
 
-fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
+fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
     match (t1, t2) {
-        (Type::Variable(v), t) | (t, Type::Variable(v)) => {
-            if t == &Type::Variable(v.clone()) {
+        (Type::Variable(v, k), t) | (t, Type::Variable(v, k)) => {
+            if t == &Type::Variable(v.clone(), k.clone()) {
                 Ok(HashMap::new())
-            } else if t.contains(v) {
-                Err(TypeError::InfiniteType(t.clone(), v.clone()))
+            } else if t.variables().contains(v) {
+                Err(TypeError::InfiniteType(
+                    t.clone(),
+                    Type::Variable(v.clone(), k.clone()),
+                ))
             } else {
                 Ok(HashMap::unit(v.clone(), t.clone()))
             }
         }
+        (Type::Application(l1, r1), Type::Application(l2, r2)) |
         (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
             let s1 = unify(l1, l2)?;
-            let s2 = unify(&r1.apply(s1.clone()), &r2.apply(s1.clone()))?;
+            let s2 = unify(&r1.apply(&s1), &r2.apply(&s1))?;
 
             Ok(combine(s2, s1))
         }
-        (Type::Constructor(c1), Type::Constructor(c2)) => {
-            if c1 == c2 {
+        (Type::Constant(c1, k1), Type::Constant(c2, k2)) => {
+            if k1 != k2 {
+                Err(TypeError::KindMismatch(
+                    Type::Constant(c1.clone(), k1.clone()),
+                    Type::Constant(c2.clone(), k2.clone()),
+                ))
+            } else if c1 == c2 {
                 Ok(HashMap::new())
             } else {
                 Err(TypeError::ConstructorMismatch(c1.clone(), c2.clone()))
@@ -91,14 +128,14 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution> {
                 let t2 = r2
                     .get(var)
                     .ok_or_else(|| TypeError::MissingField(var.clone()))?;
-                s = combine(unify(&t1.apply(s.clone()), &t2.apply(s.clone()))?, s);
+                s = combine(unify(&t1.apply(&s), &t2.apply(&s))?, s);
             }
             Ok(s)
         }
         (Type::Tuple(ts1), Type::Tuple(ts2)) => {
             let mut s = Substitution::new();
             for (t1, t2) in ts1.iter().zip(ts2.iter()) {
-                s = combine(unify(&t1.apply(s.clone()), &t2.apply(s.clone()))?, s);
+                s = combine(unify(&t1.apply(&s), &t2.apply(&s))?, s);
             }
             Ok(s)
         }
@@ -111,19 +148,23 @@ mod test {
     use super::super::types::{bool_type, num_type};
     use super::super::{
         expr::{Expr, Pattern},
-        gen::*,
+        gen,
         lexer::scan,
         parser::parse,
+        solve,
     };
     use super::*;
     use rand::{thread_rng, Rng};
 
-    fn infer(s: &str) -> Type {
+    fn infer(s: &str) -> Expr<Type> {
         let e = parse(&scan(s)).unwrap();
-        let st = GenState::default();
-        let (a, c, t1) = generate(&e, &st).unwrap();
+        let st = gen::State::default();
+        let (a, e1) = st.generate(&e).unwrap();
         assert!(a.is_empty());
-        t1.apply(solve(c.into_iter().collect(), &st).unwrap()).get_type()
+
+        let (type_vars, constraints) = st.extract();
+
+        e1.apply(&solve(constraints, solve::State::new(type_vars)).unwrap())
     }
 
     // during early stages of testing I noticed some non-determainism arising from solving thanks
@@ -138,24 +179,25 @@ mod test {
                 Box::new(Expr::Function(
                     Pattern::Variable(v1.clone()),
                     Box::new(Expr::Variable(v1.clone(), ())),
-                    ()
+                    (),
                 )),
                 Box::new(Expr::Function(
                     Pattern::Variable(v2.clone()),
                     Box::new(Expr::Variable(v2.clone(), ())),
-                    ()
+                    (),
                 )),
-                ()
+                (),
             );
-            let st = GenState::default();
-            let (a, c, t) = generate(&e, &st).unwrap();
+            let st = gen::State::default();
+            let (a, t) = st.generate(&e).unwrap();
             assert!(a.is_empty());
-            println!("{} where", t);
-            for c in &c {
-                println!("    {}", c);
-            }
 
-            let new_t = t.apply(solve(c.into_iter().collect(), &st).unwrap());
+            println!("base type {}", t.get_type());
+            println!("{}", t);
+
+            let (type_vars, constraints) = st.extract();
+
+            let new_t = t.apply(&solve(constraints, solve::State::new(type_vars)).unwrap());
             if let Some(l) = last.as_ref() {
                 assert_eq!(l.get_type(), new_t.get_type());
             }
@@ -165,7 +207,7 @@ mod test {
 
     #[test]
     fn complex_exprs() {
-        let t = infer("(fn x -> x)(fn x -> x)");
+        let t = infer("(fn x -> x)(fn x -> x)").get_type();
 
         if let Type::Arrow(l, r) = t {
             assert_eq!(l, r);
@@ -173,7 +215,7 @@ mod test {
             panic!("the type {} should be an arrow function", t);
         }
 
-        let t = infer("fn x -> if x then 1 else 0");
+        let t = infer("fn x -> if x then 1 else 0").get_type();
 
         if let Type::Arrow(l, r) = t {
             assert_eq!(l.as_ref(), &bool_type());
@@ -197,16 +239,16 @@ mod test {
 
     #[test]
     fn unify_arrow() {
-        let v0 = Box::new(Type::Variable(String::from("0")));
-        let v1 = Box::new(Type::Variable(String::from("1")));
-        let v2 = Box::new(Type::Variable(String::from("2")));
+        let v0 = Rc::new(Type::Variable(Rc::new(String::from("0")), Kind::Star));
+        let v1 = Rc::new(Type::Variable(Rc::new(String::from("1")), Kind::Star));
+        let v2 = Rc::new(Type::Variable(Rc::new(String::from("2")), Kind::Star));
 
         let t1 = Type::Arrow(v0.clone(), v0.clone());
         let t2 = Type::Arrow(v1.clone(), v2.clone());
 
         let s = unify(&t1, &t2).unwrap();
 
-        assert_eq!(v1.apply(s.clone()), v2.apply(s));
+        assert_eq!(v1.apply(&s), v2.apply(&s));
     }
 
     #[test]

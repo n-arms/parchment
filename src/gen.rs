@@ -1,328 +1,333 @@
 use super::expr::*;
 use super::types::*;
 use im::{HashMap, HashSet};
-use std::fmt;
+use std::cell::RefCell;
+use std::fmt::Display;
 use std::rc::Rc;
 
-#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-pub enum Constraint {
-    Equality(Type, Type),
-    /// t1 must be an instance of t2 when generalized over all the variables not in M
-    InstanceOf(Type, HashSet<TypeVar>, Type),
-}
-
-pub type Assumption = (String, TypeVar);
-
-impl Apply for HashSet<String> {
-    fn apply(&self, s: Substitution) -> Self {
-        self.iter()
-            .flat_map(|tv| Type::Variable(tv.clone()).apply(s.clone()).free_type_vars())
-            .collect()
-    }
-}
-
-impl Apply for Constraint {
-    fn apply(&self, s: Substitution) -> Self {
-        match self {
-            Self::Equality(t1, t2) => Self::Equality(t1.apply(s.clone()), t2.apply(s)),
-            Self::InstanceOf(sub, m, sup) => {
-                Self::InstanceOf(sub.apply(s.clone()), m.apply(s.clone()), sup.apply(s))
-            }
-        }
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct GenState {
-    /// set of unused type variables
-    tvs: Rc<TypeVarSet>,
-    /// set of monotonic type variables (the types of variables introduced by lambdas)
-    mono_tvs: HashSet<TypeVar>,
-    /// a mapping from type names to variants
-    types: HashMap<String, HashSet<Variant>>,
-    /// a mapping from variant name to type name
-    variants: HashMap<String, String>
-}
-
-impl GenState {
-    pub fn fresh(&self) -> TypeVar {
-        self.tvs.fresh()
-    }
-
-    pub fn add_mono_tv(&self, tv: TypeVar) -> Self {
-        GenState {
-            tvs: self.tvs.clone(),
-            mono_tvs: self.mono_tvs.update(tv),
-            types: self.types.clone(),
-            variants: self.variants.clone(),
-        }
-    }
-
-    pub fn add_type_def(&self, type_name: String, variants: HashSet<Variant>) -> Self {
-        let mut new_variants = self.variants.clone();
-        for Variant {name, ..} in &variants {
-            new_variants.insert(name.clone(), type_name.clone());
-        }
-        GenState {
-            tvs: self.tvs.clone(),
-            mono_tvs: self.mono_tvs.clone(),
-            types: self.types.update(type_name, variants),
-            variants: new_variants
-        }
-    }
-
-    /// get the type and the signature of a given variant
-    pub fn lookup_variant(&self, name: &str) -> Option<(String, Variant)> {
-        let type_name = self.variants.get(name)?;
-        let variant = self.types.get(type_name)?.iter().find(|v| v.name == name)?;
-        Some((type_name.clone(), variant.clone()))
-    }
-
-    pub fn variant_signature(&self, name: &str) -> Option<Type> {
-        let (name, Variant {fields, ..}) = self.lookup_variant(name)?;
-        Some(fields.into_iter().rev().fold(Type::Constructor(name), |ts, t| Type::Arrow(Box::new(t), Box::new(ts))))
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum TypeError {
-    InfiniteType(Type, String),
-    ConstructorMismatch(String, String),
-    MissingField(String),
-    NoSolvableConstraints,
-    TypeMismatch(Type, Type),
-    UnknownVariant(String)
+pub struct Assumption(String, Var);
+
+/// all the mutable and read only state needed for generating constraints
+#[derive(Clone, Default, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct State {
+    /// fresh type variables
+    fresh_type_vars: Fresh,
+    /// type variables introduced by the bindings in a lambda
+    monotonic_type_vars: HashSet<Var>,
+    /// the set of global constraints
+    constraints: Rc<RefCell<HashSet<Constraint>>>,
+    /// the mapping from type names to type definitions
+    type_defs: HashMap<String, TypeDef>,
+    /// the mapping from variant names to type names
+    variants: HashMap<String, String>,
 }
 
-pub type Result<A> = std::result::Result<A, TypeError>;
+impl State {
+    pub fn extract(self) -> (Fresh, HashSet<Constraint>) {
+        (self.fresh_type_vars, self.constraints.take())
+    }
 
-pub fn generate(
-    e: &Expr<()>,
-    st: &GenState
-) -> Result<(HashSet<Assumption>, Vec<Constraint>, Expr<Type>)> {
-    match e {
-        Expr::Variable(var, ()) => {
-            let b = st.fresh();
-            Ok((
-                HashSet::unit((var.clone(), b.clone())),
-                Vec::new(),
-                Expr::Variable(var.clone(), Type::Variable(b))
-            ))
+    pub fn fresh(&self) -> Var {
+        Rc::new(self.fresh_type_vars.fresh().to_string())
+    }
+
+    pub fn constrain(&self, c: Constraint) {
+        self.constraints.borrow_mut().insert(c);
+    }
+
+    pub fn equate(&self, t1: Type, t2: Type) {
+        self.constrain(Constraint::Equality(t1, t2));
+    }
+
+    pub fn instance(&self, super_type: Type, sub_type: Type) {
+        self.constrain(Constraint::InstanceOf(
+            sub_type,
+            self.monotonic_type_vars.clone(),
+            super_type,
+        ));
+    }
+
+    pub fn add_monotonic_type_vars(&self, tvs: HashSet<Var>) -> Self {
+        State {
+            fresh_type_vars: self.fresh_type_vars.clone(),
+            constraints: self.constraints.clone(),
+            type_defs: self.type_defs.clone(),
+            variants: self.variants.clone(),
+            monotonic_type_vars: self.monotonic_type_vars.clone().union(tvs),
         }
-        Expr::Application(e1, e2, ()) => {
-            let b = st.fresh();
-            let (a1, c1, t1) = generate(e1, st)?;
-            let (a2, c2, t2) = generate(e2, st)?;
+    }
 
-            let mut c3 = vec![Constraint::Equality(
-                t1.get_type(),
-                Type::Arrow(Box::new(t2.get_type()), Box::new(Type::Variable(b.clone()))),
-            )];
-            c3.extend(c1);
-            c3.extend(c2);
-
-            Ok((a1.union(a2), c3, Expr::Application(Box::new(t1), Box::new(t2), Type::Variable(b))))
-        }
-        // construct a fresh type var for every variable in the pattern
-        // run generation for the body
-        // for every variable-type pair in the assumption set where the variable is present in the
-        // pattern, add an equality constraint between the type in the assumption set and the type
-        // generated by the pattern
-        //
-        // find some way to take the type vars generated by the pattern and produce the "type" of
-        // the pattern
-        //
-        // some kind of "gen bindings" function on patterns that produces both a map from variables
-        // to type vars, as well as the overall type of the pattern
-        Expr::Function(pattern, body, ()) => {
-            let (bindings, tp) = pattern.type_pattern(st)?;
-            let (mut a1, c1, t1) = generate(
-                body, 
-                &bindings.values().fold(st.clone(), |st, tv| st.add_mono_tv(tv.clone()))
-            )?;
-            let mut c2: Vec<_> = a1
+    pub fn define_type(&self, name: String, type_def: TypeDef) -> Self {
+        State {
+            fresh_type_vars: self.fresh_type_vars.clone(),
+            constraints: self.constraints.clone(),
+            monotonic_type_vars: self.monotonic_type_vars.clone().update(Rc::new(name.clone())),
+            variants: type_def
+                .variants
                 .iter()
-                .filter_map(|(var, tv1)| {
-                    let tv2 = bindings.get(var)?;
-                    Some(Constraint::Equality(
-                        Type::Variable(tv1.clone()),
-                        Type::Variable(tv2.clone()),
-                    ))
-                })
-                .collect();
-            c2.extend(c1);
-            a1.retain(|(var, _)| !bindings.contains_key(var));
-            Ok((a1, c2, Expr::Function(pattern.clone(), Box::new(t1), tp)))
-        }
-        Expr::Block(b) => {
-            let (a, c, s) = gen_block(&b[..], st)?;
-            Ok((a, c, Expr::Block(s)))
-        }
-        Expr::Number(n) => Ok((
-            HashSet::new(),
-            Vec::new(),
-            Expr::Number(*n)
-        )),
-        Expr::Boolean(b) => Ok((
-            HashSet::new(),
-            Vec::new(),
-            Expr::Boolean(*b)
-        )),
-        Expr::If(pred, cons, altr) => {
-            let (a1, c1, t1) = generate(pred, st)?;
-            let (a2, c2, t2) = generate(cons, st)?;
-            let (a3, c3, t3) = generate(altr, st)?;
-
-            let mut c4 = vec![
-                Constraint::Equality(t2.get_type(), t3.get_type()),
-                Constraint::Equality(t1.get_type(), bool_type()),
-            ];
-            c4.extend(c1);
-            c4.extend(c2);
-            c4.extend(c3);
-
-            let mut a4 = a1;
-            a4.extend(a2);
-            a4.extend(a3);
-
-            Ok((a4, c4, Expr::If(Box::new(t1), Box::new(t2), Box::new(t3))))
-        }
-        Expr::Record(r) => {
-            let mut a = HashSet::new();
-            let mut cs = Vec::new();
-            let mut ts = HashMap::new();
-
-            for (var, val) in r {
-                let (a1, c1, t1) = generate(val, st)?;
-                a.extend(a1);
-                cs.extend(c1);
-                ts.insert(var.clone(), t1);
-            }
-
-            Ok((a, cs, Expr::Record(ts)))
-        }
-        Expr::Tuple(es) => {
-            let mut a = HashSet::new();
-            let mut cs = Vec::new();
-            let mut ts = Vec::new();
-
-            for e in es {
-                let (a1, c1, t1) = generate(e, st)?;
-                a.extend(a1);
-                cs.extend(c1);
-                ts.push(t1);
-            }
-
-            Ok((a, cs, Expr::Tuple(ts)))
-        }
-        Expr::Constructor(cons, ()) => {
-            let b = st.fresh();
-            let t = 
-                st.variant_signature(cons).ok_or_else(|| TypeError::UnknownVariant(cons.clone()))?;
-            Ok((
-                HashSet::new(),
-                vec![Constraint::InstanceOf(Type::Variable(b.clone()), HashSet::new(), t.clone())],
-                Expr::Variable(b, t)
-            ))
-        }
-        Expr::Operator(o, ()) => Ok((HashSet::new(), Vec::new(), gen_op(o))),
-        Expr::Match(_, _) => todo!(),
-    }
-}
-
-fn gen_op(o: &Operator) -> Expr<Type> {
-    let num = Box::new(num_type());
-    let boolean = Box::new(bool_type());
-    match &o {
-        Operator::GreaterThan
-        | Operator::GreaterThanEqual
-        | Operator::LessThan
-        | Operator::LessThanEqual
-        | Operator::Equals => Expr::Operator(*o, Type::Arrow(num.clone(), Box::new(Type::Arrow(num, boolean)))),
-        Operator::Minus | Operator::Times | Operator::Plus => {
-            Expr::Operator(*o, Type::Arrow(num.clone(), Box::new(Type::Arrow(num.clone(), num))))
+                .map(|v| (v.constructor.clone(), name.clone()))
+                .collect(),
+            type_defs: self.type_defs.update(name, type_def),
         }
     }
-}
 
-pub fn gen_block(
-    b: &[Statement<()>],
-    st: &GenState
-) -> Result<(HashSet<Assumption>, Vec<Constraint>, Vec<Statement<Type>>)> {
-    if let Some(fst) = b.get(0) {
-        match fst {
-            Statement::Let(pattern, body, ()) => {
-                let (bindings, tp) = pattern.type_pattern(st)?;
-                let (mut a1, c1, t1) = generate(body, st)?;
-                let (mut a2, c2, s) = gen_block(&b[1..], st)?;
+    pub fn lookup_variant(&self, constructor: &str) -> Option<Type> {
+        let type_name = self.variants.get(constructor)?;
+        let type_def = self.type_defs.get(type_name)?;
+        let result_kind = type_def
+            .polymorphic_vars
+            .iter()
+            .rfold(Kind::Star, |base, _| Kind::Arrow(Box::new(Kind::Star), Box::new(base)));
+        let result_type = type_def
+            .polymorphic_vars
+            .iter()
+            .fold(Type::Variable(Rc::new(type_name.clone()), result_kind), |total, var| {
+                Type::Application(Rc::new(total), Rc::new(Type::Variable(var.0.clone(), var.1.clone())))
+            });
+        let variant = type_def
+            .variants
+            .iter()
+            .find(|variant| variant.constructor == constructor)?;
+        Some(variant.fields.iter().rfold(result_type, |total, field| {
+            Type::Arrow(Rc::new(field.clone()), Rc::new(total))
+        }))
+    }
 
-                let mut c3: Vec<_> = a2
-                    .iter()
-                    .filter_map(|(var, tv1)| {
-                        let tv2 = bindings.get(var)?;
-                        Some(Constraint::InstanceOf(
-                            Type::Variable(tv1.clone()),
-                            st.mono_tvs.clone(),
-                            Type::Variable(tv2.clone()),
-                        ))
-                    })
-                    .collect();
-                c3.extend(
-                    a1.iter()
-                        .filter_map(|(var, tv1)| {
-                            let tv2 = bindings.get(var)?;
-                            Some(Constraint::Equality(
-                                Type::Variable(tv1.clone()),
-                                Type::Variable(tv2.clone()),
-                            ))
-                        })
-                        .collect::<Vec<_>>(),
-                );
+    pub fn generate(&self, e: &Expr<()>) -> Result<(HashSet<Assumption>, Expr<Type>), TypeError> {
+        match e {
+            Expr::Function(pattern, body, ()) => {
+                let (bindings, typed_pattern) = pattern.type_pattern(self)?;
 
-                a1.retain(|(var, _)| !bindings.contains_key(var));
+                let (mut a1, typed_body) = self
+                    .add_monotonic_type_vars(
+                        bindings.iter().map(|(_, tv)| tv.as_ref().clone()).collect(),
+                    )
+                    .generate(body)?;
 
-                c3.extend(c1);
-                c3.extend(c2);
-                c3.push(Constraint::Equality(tp.clone(), t1.get_type()));
+                for Assumption(v, tv) in &a1 {
+                    if let Some(tv2) = bindings.get(v) {
+                        self.equate(
+                            Type::Variable(tv.clone(), Kind::Star),
+                            Type::Variable(tv2.clone(), Kind::Star),
+                        );
+                    }
+                }
 
-                a2.retain(|(var, _)| !bindings.contains_key(var));
+                a1.retain(|Assumption(var, _)| !bindings.contains_key(var));
+
+                Ok((
+                    a1,
+                    Expr::Function(pattern.clone(), Box::new(typed_body), typed_pattern),
+                ))
+            }
+            Expr::Application(left, right, ()) => {
+                let (a1, typed_left) = self.generate(left)?;
+                let (mut a2, typed_right) = self.generate(right)?;
                 a2.extend(a1);
 
-                let mut statements = s;
-                statements.insert(0, Statement::Let(pattern.clone(), t1, tp));
+                let beta = self.fresh();
 
-                Ok((a2, c3, statements))
+                self.equate(
+                    typed_left.get_type(),
+                    Type::Arrow(
+                        Rc::new(typed_right.get_type()),
+                        Rc::new(Type::Variable(beta.clone(), Kind::Star)),
+                    ),
+                );
+                Ok((
+                    a2,
+                    Expr::Application(
+                        Box::new(typed_left),
+                        Box::new(typed_right),
+                        Type::Variable(beta, Kind::Star),
+                    ),
+                ))
             }
-            Statement::Raw(r) => {
-                let (a1, c1, t1) = generate(r, st)?;
-                if b.len() == 1 {
-                    Ok((a1, c1, vec![Statement::Raw(t1)]))
-                } else {
-                    let (mut a2, mut c2, t2) = gen_block(&b[1..], st)?;
-                    c2.extend(c1);
-                    a2.extend(a1);
+            Expr::Number(n) => Ok((HashSet::new(), Expr::Number(*n))),
+            Expr::Boolean(b) => Ok((HashSet::new(), Expr::Boolean(*b))),
+            Expr::Operator(operator, ()) => Ok((
+                HashSet::new(),
+                Expr::Operator(*operator, operator.get_type()),
+            )),
+            Expr::Variable(var, ()) => {
+                let beta = self.fresh();
+                let a = HashSet::unit(Assumption(var.clone(), beta.clone()));
+                Ok((
+                    a,
+                    Expr::Variable(var.clone(), Type::Variable(beta, Kind::Star)),
+                ))
+            }
+            Expr::Record(record) => {
+                let mut a = HashSet::new();
+                let mut typed_record = HashMap::new();
 
-                    Ok((a2, c2, t2))
+                for (var, val) in record {
+                    let (a1, typed_val) = self.generate(val)?;
+                    a.extend(a1);
+                    typed_record.insert(var.clone(), typed_val);
                 }
+
+                Ok((a, Expr::Record(typed_record)))
             }
-            Statement::TypeDef(tn, vs) => {
-                gen_block(&b[1..], &st.add_type_def(tn.clone(), vs.clone()))
+            Expr::Tuple(tuple) => {
+                let mut a = HashSet::new();
+                let mut typed_tuple = Vec::new();
+
+                for val in tuple {
+                    let (a1, typed_val) = self.generate(val)?;
+                    a.extend(a1);
+                    typed_tuple.push(typed_val);
+                }
+
+                Ok((a, Expr::Tuple(typed_tuple)))
             }
+            Expr::If(pred, cons, altr) => {
+                let (mut a1, typed_pred) = self.generate(pred)?;
+                let (a2, typed_cons) = self.generate(cons)?;
+                let (a3, typed_altr) = self.generate(altr)?;
+
+                a1.extend(a2);
+                a1.extend(a3);
+
+                self.equate(typed_cons.get_type(), typed_altr.get_type());
+
+                self.equate(typed_pred.get_type(), bool_type());
+
+                Ok((
+                    a1,
+                    Expr::If(
+                        Box::new(typed_pred),
+                        Box::new(typed_cons),
+                        Box::new(typed_altr),
+                    ),
+                ))
+            }
+            Expr::Block(block) => {
+                let (a, typed_block) = self.generate_block(block)?;
+                Ok((a, Expr::Block(typed_block)))
+            }
+            // type box a = Box a;
+            // Box :: b, {b < a -> box a}
+            Expr::Constructor(constructor, ()) => {
+                let cons_type = self
+                    .lookup_variant(constructor)
+                    .ok_or(TypeError::UnknownVariant(constructor.clone()))?;
+                let beta = Type::Variable(self.fresh(), Kind::Star);
+                self.instance(cons_type, beta.clone());
+                Ok((HashSet::new(), Expr::Constructor(constructor.clone(), beta)))
+            }
+            Expr::Match(_, _) => todo!(),
         }
-    } else {
-        Ok((
-            HashSet::new(),
-            Vec::new(),
-            todo!("add unit literals to the Expr enum")
-        ))
+    }
+
+    fn generate_block(
+        &self,
+        statements: &[Statement<()>],
+    ) -> Result<(HashSet<Assumption>, Vec<Statement<Type>>), TypeError> {
+        match statements {
+            [] => Ok((HashSet::new(), vec![])),
+            [Statement::Raw(expr)] => {
+                let (a, typed_expr) = self.generate(expr)?;
+                Ok((a, vec![Statement::Raw(typed_expr)]))
+            }
+            [Statement::Raw(expr), rest @ ..] => {
+                let (mut a1, typed_expr) = self.generate(expr)?;
+                let (a2, mut typed_rest) = self.generate_block(rest)?;
+                typed_rest.insert(0, Statement::Raw(typed_expr));
+                a1.extend(a2);
+                Ok((a1, typed_rest))
+            }
+            [Statement::Let(Pattern::Variable(var), body, ()), rest @ ..] => {
+                let beta = self.fresh();
+                let (a1, typed_body) = self.generate(body)?;
+                let (mut a2, mut typed_rest) = self.generate_block(rest)?;
+                self.equate(
+                    Type::Variable(beta.clone(), Kind::Star),
+                    typed_body.get_type(),
+                );
+
+                for Assumption(var1, tv) in &a2 {
+                    if var1 == var {
+                        self.instance(
+                            Type::Variable(beta.clone(), Kind::Star),
+                            Type::Variable(tv.clone(), Kind::Star),
+                        );
+                    }
+                }
+
+                a2.extend(a1);
+                a2.retain(|Assumption(var1, _)| var1 != var);
+
+                typed_rest.insert(
+                    0,
+                    Statement::Let(
+                        Pattern::Variable(var.clone()),
+                        typed_body,
+                        Type::Variable(beta.clone(), Kind::Star),
+                    ),
+                );
+
+                Ok((a2, typed_rest))
+            }
+            [Statement::Let(pattern, body, ()), rest @ ..] => {
+                let (bindings, typed_pattern) = pattern.type_pattern(self)?;
+                let (a1, typed_body) = self.generate(body)?;
+                let (mut a2, mut typed_rest) = self.generate_block(rest)?;
+
+                self.equate(typed_pattern.clone(), typed_body.get_type());
+
+                for Assumption(var, tv1) in &a2 {
+                    if let Some(tv2) = bindings.get(var) {
+                        self.instance(
+                            Type::Variable(tv2.clone(), Kind::Star),
+                            Type::Variable(tv1.clone(), Kind::Star),
+                        );
+                    }
+                }
+
+                a2.retain(|Assumption(var, _)| !bindings.contains_key(var));
+                a2.extend(a1);
+
+                typed_rest.insert(
+                    0,
+                    Statement::Let(pattern.clone(), typed_body, typed_pattern),
+                );
+
+                Ok((a2, typed_rest))
+            }
+            [Statement::TypeDef(alias, type_vars, variants), rest @ ..] => self
+                .define_type(
+                    alias.clone(),
+                    TypeDef {
+                        polymorphic_vars: type_vars
+                            .iter()
+                            .map(|var| (var.clone(), Kind::Star))
+                            .collect(),
+                        variants: variants.clone(),
+                    },
+                )
+                .generate_block(rest),
+        }
     }
 }
 
-impl fmt::Display for Constraint {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Constraint::Equality(l, r) => write!(f, "{} = {}", l, r),
-            Constraint::InstanceOf(sub, m, sup) => write!(f, "{} < {} [{:?}]", sub, sup, m),
+impl Display for State {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "constraints {{")?;
+        for cons in self.constraints.borrow().iter() {
+            match cons {
+                Constraint::Equality(left, right) => writeln!(f, "  {} = {}", left, right),
+                Constraint::InstanceOf(sub, m, sup) => writeln!(f, "  {} < {} [{:?}]", sub, sup, m),
+            }?;
         }
+        writeln!(f, "}}")?;
+        Ok(())
+    }
+}
+
+impl Display for Assumption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} : {}", self.0, self.1)
     }
 }

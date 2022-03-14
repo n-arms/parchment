@@ -134,7 +134,7 @@ impl std::hash::Hash for Token {
             Token::GreaterThanEquals => 27,
             Token::Constructor(_) => 28,
             Token::Pipe => 29,
-            Token::Type => 30
+            Token::Type => 30,
         }])
     }
 }

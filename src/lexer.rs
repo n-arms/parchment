@@ -80,11 +80,7 @@ pub fn scan(prog: &str) -> Vec<Token> {
                 out.push(Token::Then);
                 text = &text[5..];
             }
-            't' if text.len() > 3 
-                && text[1] == 'y'
-                && text[2] == 'p'
-                && text[3] == 'e' =>
-            {
+            't' if text.len() > 3 && text[1] == 'y' && text[2] == 'p' && text[3] == 'e' => {
                 out.push(Token::Type);
                 text = &text[4..];
             }

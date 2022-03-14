@@ -1,8 +1,6 @@
 use super::expr::{self, Operator, Pattern, Statement};
-use super::types::{Type, VarSet};
-use im::{HashMap, HashSet};
-
-type FunSet = VarSet<usize>;
+use super::types::Type;
+use im::HashSet;
 
 #[derive(Clone, Debug)]
 pub enum Expr {
@@ -52,95 +50,31 @@ pub struct Program {
     pub main: Expr,
 }
 
-fn free<A>(e: &expr::Expr<A>) -> HashSet<String> {
+#[derive(Clone, Debug, Default)]
+pub struct State {
+    free_vars: usize,
+    free_funs: usize,
+}
+
+impl State {
+    pub fn fresh_var(&mut self) -> String {
+        let var = self.free_vars.to_string();
+        self.free_vars += 1;
+        var
+    }
+
+    pub fn fresh_fun(&mut self) -> usize {
+        let fun = self.free_funs;
+        self.free_funs += 1;
+        fun
+    }
+}
+
+pub fn lift(e: &expr::Expr<Type>, current_env: &[String], st: &mut State) -> Result<Program, ()> {
     match e {
-        expr::Expr::Function(pattern, body, _) => free(body).relative_complement(pattern.bound_vars()),
-        expr::Expr::Application(e1, e2, _) => free(e1).union(free(e2)),
-        expr::Expr::Constructor(..) | expr::Expr::Operator(..) | expr::Expr::Number(_) | expr::Expr::Boolean(_) => HashSet::new(),
-        expr::Expr::Variable(var, _) => HashSet::unit(var.clone()),
-        expr::Expr::Record(r) => r.values().flat_map(free).collect(),
-        expr::Expr::Tuple(es) => {
-            es.iter().flat_map(free).collect()
-        }
-        expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
-        expr::Expr::Block(b) => free_block(b),
-        expr::Expr::Match(_, _) => todo!(),
-    }
-}
-
-fn free_block<A>(b: &[Statement<A>]) -> HashSet<String> {
-    match b {
-        [Statement::Let(pattern, body, _), rest @ ..] => free(body)
-            .union(free_block(rest))
-            .relative_complement(pattern.bound_vars()),
-        [Statement::Raw(e), rest @ ..] => free(e).union(free_block(rest)),
-        [Statement::TypeDef(..), rest @ ..] => free_block(rest),
-        [] => HashSet::new(),
-    }
-}
-
-pub fn to_lookup(p: &Pattern, base: Expr) -> Vec<Expr> {
-    match p {
-        Pattern::Variable(v) => vec![Expr::Assign(v.clone(), Box::new(base))],
-        Pattern::Record(r) => {
-            let mut fields: Vec<_> = r.iter().collect();
-            fields.sort_by_key(|(name, _)| *name);
-            fields
-                .into_iter()
-                .enumerate()
-                .flat_map(|(i, (_, p))| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
-                .collect()
-        }
-        Pattern::Tuple(t) => t
-            .iter()
-            .enumerate()
-            .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
-            .collect(),
-        Pattern::Construction(_, ps) => ps
-            .iter()
-            .enumerate()
-            .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i + 1)))
-            .collect()
-    }
-}
-
-pub struct ConstructorEnv {
-    new: VarSet<u64>,
-    interned: HashMap<String, u64>,
-}
-
-impl Default for ConstructorEnv {
-    fn default() -> Self {
-        ConstructorEnv {
-            new: VarSet::new(|i| i as u64),
-            interned: HashMap::new(),
-        }
-    }
-}
-
-impl ConstructorEnv {
-    pub fn get_or_intern(&mut self, cons: &str) -> u64 {
-        if let Some(idx) = self.interned.get(cons) {
-            *idx
-        } else {
-            let new_var = self.new.fresh();
-            self.interned.insert(cons.to_string(), new_var);
-            new_var
-        }
-    }
-}
-
-pub fn lift(
-    e: &expr::Expr<Type>,
-    current_env: &[String],
-    v: &VarSet<String>,
-    fun: &FunSet,
-    cons: &mut ConstructorEnv,
-) -> Result<Program, ()> {
-    match e {
-        expr::Expr::Constructor(..) => todo!(),
+        expr::Expr::Constructor(..) => Err(()),
         expr::Expr::Function(pattern, body, _) => {
-            let (defs, ptr, env) = lift_function(pattern, body, None, current_env, v, fun, cons)?;
+            let (defs, ptr, env) = lift_function(pattern, body, None, current_env, st)?;
 
             Ok(Program {
                 defs,
@@ -150,15 +84,15 @@ pub fn lift(
         expr::Expr::Application(e1, e2, _) => {
             if let expr::Expr::Application(e3, e4, _) = e1.as_ref() {
                 if let expr::Expr::Operator(o, _) = e3.as_ref() {
-                    let mut p1 = lift(e4, current_env, v, fun, cons)?;
-                    let Program { defs, main } = lift(e2, current_env, v, fun, cons)?;
+                    let mut p1 = lift(e4, current_env, st)?;
+                    let Program { defs, main } = lift(e2, current_env, st)?;
                     p1.defs.extend(defs);
                     p1.main = Expr::BinaryPrimitive(*o, Box::new(p1.main), Box::new(main));
                     return Ok(p1);
                 }
             }
-            let mut p1 = lift(e1, current_env, v, fun, cons)?;
-            let Program { defs, main } = lift(e2, current_env, v, fun, cons)?;
+            let mut p1 = lift(e1, current_env, st)?;
+            let Program { defs, main } = lift(e2, current_env, st)?;
 
             p1.defs.extend(defs);
             p1.main = Expr::Application(Box::new(p1.main), Box::new(main));
@@ -188,7 +122,7 @@ pub fn lift(
         expr::Expr::Record(r) => {
             let mut terms: Vec<(String, Program)> = r
                 .iter()
-                .map(|(var, e)| Ok((var.clone(), lift(e, current_env, v, fun, cons)?)))
+                .map(|(var, e)| Ok((var.clone(), lift(e, current_env, st)?)))
                 .collect::<Result<_, _>>()?;
             terms.sort_by_key(|(var, _)| var.clone());
             let mut defs = Vec::new();
@@ -207,7 +141,7 @@ pub fn lift(
             let mut terms = Vec::new();
 
             for e in es {
-                let Program { defs: d, main } = lift(e, current_env, v, fun, cons)?;
+                let Program { defs: d, main } = lift(e, current_env, st)?;
                 defs.extend(d);
                 terms.push(main);
             }
@@ -218,9 +152,9 @@ pub fn lift(
             })
         }
         expr::Expr::If(p, c, a) => {
-            let mut p1 = lift(p, current_env, v, fun, cons)?;
-            let p2 = lift(c, current_env, v, fun, cons)?;
-            let p3 = lift(a, current_env, v, fun, cons)?;
+            let mut p1 = lift(p, current_env, st)?;
+            let p2 = lift(c, current_env, st)?;
+            let p3 = lift(a, current_env, st)?;
             p1.defs.extend(p2.defs);
             p1.defs.extend(p3.defs);
             p1.main = Expr::If(Box::new(p1.main), Box::new(p2.main), Box::new(p3.main));
@@ -232,9 +166,13 @@ pub fn lift(
             for (i, stmt) in b.iter().enumerate() {
                 match stmt {
                     // this is the only form of recursive let statements that we support
-                    Statement::Let(Pattern::Variable(var), expr::Expr::Function(pattern, body, _), _) => {
+                    Statement::Let(
+                        Pattern::Variable(var),
+                        expr::Expr::Function(pattern, body, _),
+                        _,
+                    ) => {
                         let (ds, ptr, env) =
-                            lift_function(pattern, body, Some(var.clone()), current_env, v, fun, cons)?;
+                            lift_function(pattern, body, Some(var.clone()), current_env, st)?;
                         exprs.push(Expr::Assign(
                             var.clone(),
                             Box::new(Expr::Closure(ptr, Box::new(Expr::Record(env)))),
@@ -242,15 +180,15 @@ pub fn lift(
                         defs.extend(ds);
                     }
                     Statement::Let(pattern, body, _) => {
-                        let temp = v.fresh();
+                        let temp = st.fresh_var();
                         let lookup = to_lookup(pattern, Expr::Variable(temp.clone()));
-                        let Program { main, defs: d } = lift(body, current_env, v, fun, cons)?;
+                        let Program { main, defs: d } = lift(body, current_env, st)?;
                         exprs.push(Expr::Assign(temp, Box::new(main)));
                         exprs.extend(lookup);
                         defs.extend(d);
                     }
                     Statement::Raw(e) => {
-                        let Program { main, defs: d } = lift(e, current_env, v, fun, cons)?;
+                        let Program { main, defs: d } = lift(e, current_env, st)?;
                         exprs.push(if i == b.len() - 1 {
                             main
                         } else {
@@ -258,7 +196,7 @@ pub fn lift(
                         });
                         defs.extend(d);
                     }
-                    Statement::TypeDef(..) => ()
+                    Statement::TypeDef(..) => (),
                 }
             }
             Ok(Program {
@@ -267,8 +205,8 @@ pub fn lift(
             })
         }
         expr::Expr::Operator(o, _) => {
-            let id1 = fun.fresh();
-            let id2 = fun.fresh();
+            let id1 = st.fresh_fun();
+            let id2 = st.fresh_fun();
 
             let f1 = FunctionDef {
                 arg: String::from("b"),
@@ -305,23 +243,21 @@ fn lift_function(
     b: &expr::Expr<Type>,
     recuring_on: Option<String>,
     current_env: &[String],
-    v: &VarSet<String>,
-    fun: &FunSet,
-    cons: &mut ConstructorEnv,
+    st: &mut State,
 ) -> Result<(Vec<FunctionDef>, usize, Vec<Expr>), ()> {
-    let f_id = fun.fresh();
+    let f_id = st.fresh_fun();
     let mut env: Vec<_> = free(b)
         .relative_complement(p.bound_vars())
         .into_iter()
         .collect();
     env.sort();
 
-    let mut body = lift(b, &env, v, fun, cons)?;
+    let mut body = lift(b, &env, st)?;
 
     let (mut lookup, arg) = if let Pattern::Variable(var) = p {
         (vec![], var.clone())
     } else {
-        let arg = v.fresh();
+        let arg = st.fresh_var();
 
         (to_lookup(p, Expr::Variable(arg.clone())), arg)
     };
@@ -367,5 +303,60 @@ pub fn locals(e: &Expr) -> HashSet<String> {
         Expr::Assign(v, e) => locals(e).update(v.clone()),
         Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),
         Expr::BinaryPrimitive(_, e1, e2) => locals(e1).union(locals(e2)),
+    }
+}
+
+fn free<A>(e: &expr::Expr<A>) -> HashSet<String> {
+    match e {
+        expr::Expr::Function(pattern, body, _) => {
+            free(body).relative_complement(pattern.bound_vars())
+        }
+        expr::Expr::Application(e1, e2, _) => free(e1).union(free(e2)),
+        expr::Expr::Constructor(..)
+        | expr::Expr::Operator(..)
+        | expr::Expr::Number(_)
+        | expr::Expr::Boolean(_) => HashSet::new(),
+        expr::Expr::Variable(var, _) => HashSet::unit(var.clone()),
+        expr::Expr::Record(r) => r.values().flat_map(free).collect(),
+        expr::Expr::Tuple(es) => es.iter().flat_map(free).collect(),
+        expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
+        expr::Expr::Block(b) => free_block(b),
+        expr::Expr::Match(_, _) => todo!(),
+    }
+}
+
+fn free_block<A>(b: &[Statement<A>]) -> HashSet<String> {
+    match b {
+        [Statement::Let(pattern, body, _), rest @ ..] => free(body)
+            .union(free_block(rest))
+            .relative_complement(pattern.bound_vars()),
+        [Statement::Raw(e), rest @ ..] => free(e).union(free_block(rest)),
+        [Statement::TypeDef(..), rest @ ..] => free_block(rest),
+        [] => HashSet::new(),
+    }
+}
+
+pub fn to_lookup(p: &Pattern, base: Expr) -> Vec<Expr> {
+    match p {
+        Pattern::Variable(v) => vec![Expr::Assign(v.clone(), Box::new(base))],
+        Pattern::Record(r) => {
+            let mut fields: Vec<_> = r.iter().collect();
+            fields.sort_by_key(|(name, _)| *name);
+            fields
+                .into_iter()
+                .enumerate()
+                .flat_map(|(i, (_, p))| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
+                .collect()
+        }
+        Pattern::Tuple(t) => t
+            .iter()
+            .enumerate()
+            .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i)))
+            .collect(),
+        Pattern::Construction(_, ps) => ps
+            .iter()
+            .enumerate()
+            .flat_map(|(i, p)| to_lookup(p, Expr::RecordLookup(Box::new(base.clone()), i + 1)))
+            .collect(),
     }
 }

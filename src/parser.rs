@@ -5,19 +5,20 @@ macro_rules! make_bin {
                 Box::new(Expr::Application(
                     Box::new(Expr::Operator($op, ())),
                     Box::new(l),
-                    ()
+                    (),
                 )),
                 Box::new(r),
-                ()
+                (),
             )
         }) as fn(_, _) -> _
     };
 }
 
 use super::expr::{Expr, Operator, Pattern, Statement};
-use super::types::{Type, Variant, unit_type, num_type, bool_type};
 use super::token::Token;
+use super::types::{bool_type, num_type, Kind, Type, Variant};
 use chumsky::prelude::*;
+use std::rc::Rc;
 
 pub fn parse(t: &[Token]) -> Result<Expr<()>, Vec<Simple<Token>>> {
     parser().parse(t)
@@ -54,15 +55,15 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             Token::Constructor(c) => c
         );
 
-        let type_constructor = select!(
+        let type_constant = select!(
             Token::Constructor(c) if &c == "Num" => num_type(),
             Token::Constructor(c) if &c == "Bool" => bool_type()
         );
 
         let typ = recursive(|typ| {
             variable
-                .map(Type::Variable)
-                .or(type_constructor)
+                .map(|var| Type::Variable(Rc::new(var), Kind::Star))
+                .or(type_constant)
                 .or(just(Token::Lpar)
                     .ignore_then(typ.clone())
                     .then(just(Token::Comma).ignore_then(typ.clone()).repeated())
@@ -70,15 +71,14 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                     .map(|(hd, mut tl)| {
                         tl.insert(0, hd);
                         Type::Tuple(tl)
-                    })
-                )
+                    }))
         });
 
         let variant = constructor
             .then(typ.clone().repeated())
-            .map(|(name, fields)| Variant {
-                name,
-                fields
+            .map(|(constructor, fields)| Variant {
+                constructor,
+                fields,
             });
 
         let pattern = recursive(|pattern| {
@@ -96,12 +96,10 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                     }))
                 .or(just(Token::Lpar)
                     .ignore_then(pattern.clone())
-                    .then_ignore(just(Token::Rpar))
-                )
+                    .then_ignore(just(Token::Rpar)))
                 .or(constructor
                     .then(pattern.clone().repeated())
-                    .map(|(c, es)| Pattern::Construction(c, es))
-                )
+                    .map(|(c, es)| Pattern::Construction(c, es)))
         });
 
         let function = just(Token::Fn)
@@ -118,15 +116,14 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             .or(expr.clone().map(Statement::Raw))
             .then_ignore(just(Token::Semicolon))
             .or(just(Token::Type)
-                .ignore_then(variable)
+                .ignore_then(variable.clone())
+                .then(variable.map(Rc::new).repeated())
                 .then_ignore(just(Token::Eqs))
                 .then(variant.clone())
-                .then(just(Token::Pipe)
-                      .ignore_then(variant.clone())
-                      .repeated())
-                .map(|((name, hd), mut tl)| {
+                .then(just(Token::Pipe).ignore_then(variant.clone()).repeated())
+                .map(|(((name, tvs), hd), mut tl)| {
                     tl.insert(0, hd);
-                    Statement::TypeDef(name, tl.into_iter().collect())
+                    Statement::TypeDef(name, tvs, tl.into_iter().collect())
                 })
                 .then_ignore(just(Token::Semicolon)));
 
@@ -216,8 +213,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
             .foldl(|l, (f, r)| f(l, r));
 
-        eqs
-            .clone()
+        eqs.clone()
             .then(eqs.repeated())
             .foldl(|lhs, rhs| Expr::Application(Box::new(lhs), Box::new(rhs), ()))
     })

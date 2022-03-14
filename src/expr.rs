@@ -1,9 +1,10 @@
-use super::types::{Type, TypeVar, TypeVarSet, Variant, num_type, bool_type, unit_type};
-use super::gen::{TypeError, GenState};
+use super::gen::State;
+use super::types::{bool_type, num_type, unit_type, Kind, Type, TypeError, Var, Variant};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
 use std::fmt;
+use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Pattern {
@@ -14,12 +15,15 @@ pub enum Pattern {
 }
 
 impl Pattern {
-    /// create a mapping from type vars to types, and return a type representing the pattern
-    pub fn type_pattern(&self, st: &GenState) -> Result<(HashMap<String, TypeVar>, Type), TypeError> {
+    /// create a mapping from vars to types, and return a type representing the pattern
+    pub fn type_pattern(&self, st: &State) -> Result<(HashMap<String, Var>, Type), TypeError> {
         match self {
             Pattern::Variable(v) => {
                 let b = st.fresh();
-                Ok((HashMap::unit(v.clone(), b.clone()), Type::Variable(b)))
+                Ok((
+                    HashMap::unit(v.clone(), b.clone()),
+                    Type::Variable(b, Kind::Star),
+                ))
             }
             Pattern::Record(r) => {
                 let mut bindings = HashMap::new();
@@ -42,13 +46,7 @@ impl Pattern {
                 Ok((bindings, Type::Tuple(terms)))
             }
             Pattern::Construction(name, ps) => {
-                let mut bindings = HashMap::new();
-                let (name, Variant {fields, ..}) = st.lookup_variant(name).ok_or_else(|| TypeError::UnknownVariant(name.clone()))?;
-                for p in ps {
-                    let (b1, p1) = p.type_pattern(st)?;
-                    bindings.extend(b1);
-                }
-                Ok((bindings, Type::Constructor(name)))
+                todo!()
             }
         }
     }
@@ -57,12 +55,12 @@ impl Pattern {
         match self {
             Pattern::Variable(v) => HashSet::unit(v.clone()),
             Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
-            Pattern::Construction(_, t) | Pattern::Tuple(t) => t.iter().flat_map(Pattern::bound_vars).collect(),
-            
+            Pattern::Construction(_, t) | Pattern::Tuple(t) => {
+                t.iter().flat_map(Pattern::bound_vars).collect()
+            }
         }
     }
 }
-
 #[derive(Clone, Debug)]
 pub enum Expr<A> {
     /// a function with a domain of type A
@@ -84,14 +82,24 @@ pub enum Expr<A> {
 impl Expr<Type> {
     pub fn get_type(&self) -> Type {
         match self {
-            Expr::Function(_, body, pattern_type) => Type::Arrow(Box::new(pattern_type.clone()), Box::new(body.get_type())),
+            Expr::Function(_, body, pattern_type) => {
+                Type::Arrow(Rc::new(pattern_type.clone()), Rc::new(body.get_type()))
+            }
             Expr::Application(_, _, app_type) => app_type.clone(),
             Expr::Number(_) => num_type(),
             Expr::Boolean(_) => bool_type(),
-            Expr::Record(record) => Type::Record(record.iter().map(|(val, var)| (val.clone(), var.get_type())).collect()),
+            Expr::Record(record) => Type::Record(
+                record
+                    .iter()
+                    .map(|(val, var)| (val.clone(), var.get_type()))
+                    .collect(),
+            ),
             Expr::If(_, expr, _) => expr.get_type(),
             Expr::Match(_, _) => todo!(),
-            Expr::Block(block) => block.last().map(Statement::get_type).unwrap_or_else(|| unit_type()),
+            Expr::Block(block) => block
+                .last()
+                .map(Statement::get_type)
+                .unwrap_or_else(|| unit_type()),
             Expr::Tuple(tuple) => Type::Tuple(tuple.iter().map(|val| val.get_type()).collect()),
             Expr::Operator(_, t) | Expr::Constructor(_, t) | Expr::Variable(_, t) => t.clone(),
         }
@@ -110,12 +118,32 @@ pub enum Operator {
     GreaterThanEqual,
 }
 
+impl Operator {
+    pub fn get_type(&self) -> Type {
+        match self {
+            Operator::Plus | Operator::Minus | Operator::Times => Type::Arrow(
+                Rc::new(num_type()),
+                Rc::new(Type::Arrow(Rc::new(num_type()), Rc::new(num_type()))),
+            ),
+            Operator::Equals
+            | Operator::LessThan
+            | Operator::LessThanEqual
+            | Operator::GreaterThan
+            | Operator::GreaterThanEqual => Type::Arrow(
+                Rc::new(num_type()),
+                Rc::new(Type::Arrow(Rc::new(num_type()), Rc::new(bool_type()))),
+            ),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Statement<A> {
     /// a let statement with a binding of type A
     Let(Pattern, Expr<A>, A),
     Raw(Expr<A>),
-    TypeDef(String, HashSet<Variant>)
+    /// the name of the type, the polymorphic type variables, the possible variants
+    TypeDef(String, Vec<Var>, HashSet<Variant>),
 }
 
 impl Statement<Type> {
@@ -218,24 +246,25 @@ impl<A: cmp::PartialEq> cmp::PartialEq for Expr<A> {
     }
 }
 
-impl<A: fmt::Display> fmt::Display
-    for Statement<A>
-{
+impl fmt::Display for Statement<Type> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Statement::Raw(r) => r.fmt(f),
             Statement::Let(pattern, body, _) => write!(f, "let {} = {}", pattern, body),
-            Statement::TypeDef(tn, vs) => write!(f, "type {} = {:?}", tn, vs),
+            Statement::TypeDef(tn, tvs, vs) => {
+                write!(f, "type {} ", tn)?;
+                for var in tvs {
+                    write!(f, "{} ", var)?;
+                }
+                write!(f, "= {:?}", vs)
+            }
         }
     }
 }
 
 impl<A: cmp::Eq> cmp::Eq for Expr<A> {}
 
-fn show_tailing_fn<A: fmt::Display>(
-    margin: usize,
-    e: &Expr<A>,
-) -> String {
+fn show_tailing_fn(margin: usize, e: &Expr<Type>) -> String {
     match e {
         Expr::Function(pattern, body, _) if matches!(body.as_ref(), Expr::Function(..)) => {
             format!("{} {}", pattern, show_tailing_fn(margin, body))
@@ -250,10 +279,7 @@ fn show_tailing_fn<A: fmt::Display>(
     }
 }
 
-fn show_expr<A: fmt::Display>(
-    margin: usize,
-    e: &Expr<A>,
-) -> String {
+fn show_expr(margin: usize, e: &Expr<Type>) -> String {
     let margin_str: String = vec![' '; margin * 2].iter().collect();
     match e {
         Expr::Application(l, r, _) => format!(
@@ -310,21 +336,87 @@ fn show_expr<A: fmt::Display>(
                 acc
             })
         ),
-        Expr::Operator(o, _) => String::from(match o {
-            Operator::Plus => "+",
-            Operator::Minus => "-",
-            Operator::Times => "*",
-            Operator::Equals => "==",
-            Operator::LessThan => "<",
-            Operator::LessThanEqual => "<=",
-            Operator::GreaterThan => ">",
-            Operator::GreaterThanEqual => ">=",
-        }),
+        Expr::Operator(o, _) => String::from(o.to_string()),
         e => format!("fn {}", show_tailing_fn(margin, e)),
     }
 }
 
-impl<A: fmt::Display> fmt::Display for Expr<A> {
+impl fmt::Display for Operator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{}",
+            match self {
+                Operator::Plus => "+",
+                Operator::Minus => "-",
+                Operator::Times => "*",
+                Operator::Equals => "==",
+                Operator::LessThan => "<",
+                Operator::LessThanEqual => "<=",
+                Operator::GreaterThan => ">",
+                Operator::GreaterThanEqual => ">=",
+            }
+        )
+    }
+}
+
+impl fmt::Display for Expr<()> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Expr::Function(pattern, body, ()) => write!(f, "(fn {} -> {})", pattern, body),
+            Expr::Application(left, right, ()) => write!(f, "({} {})", left, right),
+            Expr::Number(n) => write!(f, "{}", n),
+            Expr::Boolean(b) => write!(f, "{}", b),
+            Expr::Operator(op, ()) => write!(f, "{}", op),
+            Expr::Variable(var, ()) => write!(f, "{}", var),
+            Expr::Record(record) => {
+                write!(f, "{{")?;
+                for (var, val) in record {
+                    write!(f, "{}: {}, ", var, val)?;
+                }
+                write!(f, "}}")?;
+                Ok(())
+            }
+            Expr::If(pred, cons, altr) => write!(f, "if {} then {} else {}", pred, cons, altr),
+            Expr::Block(block) => {
+                write!(f, "{{")?;
+                for statement in block {
+                    write!(f, "{}; ", statement)?;
+                }
+                write!(f, "}}")?;
+                Ok(())
+            }
+            Expr::Tuple(tuple) => {
+                write!(f, "(")?;
+                for val in tuple {
+                    write!(f, "{}, ", val)?;
+                }
+                write!(f, ")")?;
+                Ok(())
+            }
+            Expr::Constructor(cons, _) => write!(f, "{}", cons),
+            Expr::Match(_, _) => todo!(),
+        }
+    }
+}
+
+impl fmt::Display for Statement<()> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Statement::Let(pattern, body, ()) => write!(f, "let {} = {}", pattern, body),
+            Statement::Raw(expr) => write!(f, "{}", expr),
+            Statement::TypeDef(tn, tvs, vs) => {
+                write!(f, "type {} ", tn)?;
+                for var in tvs {
+                    write!(f, "{} ", var)?;
+                }
+                write!(f, "= {:?}", vs)
+            }
+        }
+    }
+}
+
+impl fmt::Display for Expr<Type> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", show_expr(0, self))
     }
@@ -337,7 +429,7 @@ impl Expr<()> {
             0 => Expr::Application(
                 Box::new(Expr::rand(from_num)),
                 Box::new(Expr::rand(from_num)),
-                ()
+                (),
             ),
             1 => Expr::Function(Pattern::rand(from_num), Box::new(Expr::rand(from_num)), ()),
             2 => Expr::Number(rand::thread_rng().gen()),
@@ -353,7 +445,7 @@ impl fmt::Display for Pattern {
             Pattern::Variable(v) => write!(f, "{}", v),
             Pattern::Record(r) => write!(f, "{:?}", r),
             Pattern::Tuple(t) => write!(f, "{:?}", t),
-            Pattern::Construction(c, ps) => write!(f, "{} {:?}", c, ps)
+            Pattern::Construction(c, ps) => write!(f, "{} {:?}", c, ps),
         }
     }
 }

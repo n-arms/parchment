@@ -11,14 +11,13 @@ mod types;
 mod wasm;
 
 use codegen::emit_program;
-use gen::{GenState, generate};
-use lift::{lift, ConstructorEnv};
+use lift::lift;
 use parser::parse;
 use solve::solve;
 use std::fs::write;
 use std::io::{self, BufRead};
 use std::process::{Command, Output};
-use types::{Apply, Type, VarSet};
+use types::{Apply, Type};
 use wasm::WATFormatter;
 
 fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
@@ -55,31 +54,30 @@ fn process_text(lines: String, state: &ReplState) {
         }
     };
 
-    let st = GenState::default();
-    let (a, c, ast) = match generate(&ast, &st) {
+    let st = gen::State::default();
+    let (a, ast) = match st.generate(&ast) {
         Ok(s) => s,
         Err(e) => {
             println!("{:?}", e);
             return;
         }
     };
+
     if state.type_debug {
-        println!("constraints");
-        for cons in &c {
-            println!("\t{}", cons);
-        }
-        println!("\nbase type\n\t{}", ast.get_type());
+        println!("{}\nbase type\n\t{}", st, ast.get_type());
     }
 
     if !a.is_empty() {
         println!("non empty assumption set:");
-        for (v, t) in a {
-            println!("{} : {}", v, t);
+        for assum in a {
+            println!("{}", assum);
         }
         return;
     }
 
-    let s = match solve(c.iter().cloned().collect(), &st) {
+    let (type_vars, constraints) = st.extract();
+
+    let s = match solve(constraints, solve::State::new(type_vars)) {
         Ok(cs) => cs,
         Err(e) => {
             println!("{:?}", e);
@@ -95,20 +93,14 @@ fn process_text(lines: String, state: &ReplState) {
         println!();
     }
 
-    let final_expr = ast.apply(s);
+    let final_expr = ast.apply(&s);
     println!(":: {}", final_expr.get_type());
 
     if !state.eval {
         return;
     }
 
-    let lifted = match lift(
-        &ast,
-        &[],
-        &VarSet::default(),
-        &VarSet::default(),
-        &mut ConstructorEnv::default(),
-    ) {
+    let lifted = match lift(&ast, &[], &mut lift::State::default()) {
         Ok(l) => l,
         Err(()) => return,
     };
@@ -166,13 +158,16 @@ fn process_text(lines: String, state: &ReplState) {
         "= {}",
         match final_expr.get_type() {
             Type::Arrow(_, _) => String::from("<fun>"),
-            Type::Constructor(c) if c == "Num" =>
+            Type::Constant(c, _) if c.as_ref() == "Num" =>
                 f64::from_ne_bytes(num.to_ne_bytes()).to_string(),
-            Type::Constructor(c) if c == "Bool" =>
+            Type::Constant(c, _) if c.as_ref() == "Bool" =>
                 String::from(if num == 0 { "false" } else { "true" }),
-            Type::Constructor(c) if c == "Unit" => String::from("()"),
+            Type::Constant(c, _) if c.as_ref() == "Unit" => String::from("()"),
             _ => {
-                println!("I don't know how to display the type {}", final_expr.get_type());
+                println!(
+                    "I don't know how to display the type {}",
+                    final_expr.get_type()
+                );
                 return;
             }
         }
@@ -226,25 +221,30 @@ mod test {
 
     fn eval(text: &str) -> u64 {
         let untyped = parse(&lexer::scan(text)).unwrap();
-        let state = GenState::default();
-        let (a, cs, partial_typed) = generate(&untyped, &state).unwrap();
+        let state = gen::State::default();
+        let (a, e1) = state.generate(&untyped).unwrap();
         assert!(a.is_empty());
-        let sub = solve(cs.into_iter().collect(), &state).unwrap();
-        let typed = partial_typed.apply(sub);
-        let lifted = lift(
-            &typed,
-            &[],
-            &VarSet::default(),
-            &VarSet::default(),
-            &mut ConstructorEnv::default(),
-        ).unwrap();
+
+        let (type_vars, constraints) = state.extract();
+
+        let sub = solve(constraints, solve::State::new(type_vars)).unwrap();
+
+        let typed = e1.apply(&sub);
+        let lifted = lift(&typed, &[], &mut lift::State::default()).unwrap();
         let wat = emit_program(lifted);
         let mut fmt = WATFormatter::default();
         wat.format(&mut fmt);
 
         write("./temp.wat", fmt.to_string()).unwrap();
-        assert!(Command::new("wat2wasm").arg("./temp.wat").spawn().unwrap().wait().unwrap().success());
-        let Output {status, stdout, ..} = Command::new("node").arg("runwasm.js").output().unwrap();
+        assert!(Command::new("wat2wasm")
+            .arg("./temp.wat")
+            .spawn()
+            .unwrap()
+            .wait()
+            .unwrap()
+            .success());
+        let Output { status, stdout, .. } =
+            Command::new("node").arg("runwasm.js").output().unwrap();
         assert!(status.success());
 
         stdout
@@ -264,29 +264,34 @@ mod test {
     fn full_stack() {
         assert_eq!(
             6.,
-            cast_f64(eval(r#"
+            cast_f64(eval(
+                r#"
                 {
                     let sub1 = fn x -> x - 1;
                     let is_zero = fn x -> x <= 0.01;
                     let fact = fn x -> if is_zero x then 1 else x * (fact (sub1 x));
                     if (is_zero (sub1 42)) then 3 else (fact 3);
                 }
-            "#))
+            "#
+            ))
         );
 
         assert_eq!(
             12.,
-            cast_f64(eval(r#"
+            cast_f64(eval(
+                r#"
                 {
                     let {a:(x, y), b:z} = {a: (3, 4), b: 5};
                     x + y + z;
                 }
-            "#))
+            "#
+            ))
         );
 
         assert_eq!(
             false,
-            cast_bool(eval(r#"
+            cast_bool(eval(
+                r#"
                 {
                     let is_zero = fn x -> x <= 0.01;
                     let not = fn x -> if x then false else true;
@@ -294,19 +299,22 @@ mod test {
                     let is_even = fn x -> if is_zero x then true else not (is_even (sub1 x));
                     is_even 7;
                 }
-            "#))
+            "#
+            ))
         );
 
         assert_eq!(
             0.,
-            cast_f64(eval(r#"
+            cast_f64(eval(
+                r#"
                 {
                     type maybe = Just a | Nothing;
                     Just 5;
                     Just true;
                     0;
                 }
-            "#))
+            "#
+            ))
         );
     }
 }

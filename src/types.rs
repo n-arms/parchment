@@ -1,279 +1,287 @@
-#![allow(dead_code)]
-
-use im::hashmap::HashMap;
-use im::hashset::HashSet;
+use super::expr::{Expr, Pattern, Statement};
+use im::{HashMap, HashSet};
 use std::cell::Cell;
-use std::fmt;
-use super::gen::GenState;
-use super::expr::{Statement, Expr};
+use std::fmt::Display;
+use std::rc::Rc;
 
-pub type TypeVar = String;
-pub type TypeEnv = HashMap<String, Scheme>;
+pub type Var = Rc<String>;
 
-#[derive(Debug, PartialEq, Eq)]
-pub struct VarSet<V> {
-    index: Cell<usize>,
-    f: fn(usize) -> V,
-}
-
-impl<V> VarSet<V> {
-    pub fn new(f: fn(usize) -> V) -> Self {
-        VarSet {
-            index: Cell::new(0),
-            f,
-        }
-    }
-
-    pub fn fresh(&self) -> V {
-        let var = self.index.take();
-        self.index.set(var + 1);
-        (self.f)(var)
-    }
-}
-
-impl Default for VarSet<String> {
-    fn default() -> Self {
-        VarSet::new(|v| v.to_string())
-    }
-}
-
-impl Default for VarSet<usize> {
-    fn default() -> Self {
-        VarSet::new(|v| v)
-    }
-}
-
-pub type TypeVarSet = VarSet<String>;
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Type {
-    Variable(TypeVar),
-    Arrow(Box<Type>, Box<Type>),
-    Constructor(String),
-    Record(HashMap<String, Type>),
+    Constant(Var, Kind),
+    Variable(Var, Kind),
+    Arrow(Rc<Type>, Rc<Type>),
     Tuple(Vec<Type>),
+    Record(HashMap<String, Type>),
+    Application(Rc<Type>, Rc<Type>),
 }
 
-pub fn num_type() -> Type {
-    Type::Constructor(String::from("Num"))
-}
-
-pub fn bool_type() -> Type {
-    Type::Constructor(String::from("Bool"))
-}
-
-pub fn unit_type() -> Type {
-    Type::Constructor(String::from("Unit"))
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variant {
-    pub name: String,
+    pub constructor: String,
     pub fields: Vec<Type>,
 }
 
-impl Type {
-    /* create a scheme from a type
-     * the polymorphic type vars are all the free vars in the type that are not free in Infer
-     */
-    pub fn generalize(&self, free: HashSet<String>) -> Scheme {
-        Scheme(
-            self.free_type_vars().relative_complement(free),
-            self.clone(),
-        )
-    }
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeDef {
+    pub polymorphic_vars: Vec<(Var, Kind)>,
+    pub variants: HashSet<Variant>,
+}
 
-    pub fn contains(&self, v: &TypeVar) -> bool {
+impl Type {
+    pub fn variables(&self) -> HashSet<Var> {
         match self {
-            Type::Arrow(l, r) => l.contains(v) || r.contains(v),
-            Type::Variable(v1) => v1 == v,
-            Type::Constructor(_) => false,
-            Type::Record(r) => r.values().any(|t| t.contains(v)),
-            Type::Tuple(t) => t.iter().any(|t| t.contains(v)),
+            Type::Constant(_, _) => HashSet::new(),
+            Type::Variable(var, _) => HashSet::unit(var.clone()),
+            Type::Application(left, right) | Type::Arrow(left, right) => {
+                left.variables().union(right.variables())
+            }
+            Type::Tuple(tuple) => tuple.iter().flat_map(Type::variables).collect(),
+            Type::Record(record) => record.values().flat_map(Type::variables).collect(),
         }
     }
 }
 
+/// a supply for fresh type variables
+#[derive(Default, Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Fresh(Rc<Cell<usize>>);
+
+impl Fresh {
+    pub fn fresh(&self) -> usize {
+        let old = self.0.take();
+        self.0.set(old + 1);
+        old
+    }
+}
+
+pub fn num_type() -> Type {
+    Type::Constant(Rc::new(String::from("Num")), Kind::Star)
+}
+
+pub fn bool_type() -> Type {
+    Type::Constant(Rc::new(String::from("Bool")), Kind::Star)
+}
+
+pub fn unit_type() -> Type {
+    Type::Constant(Rc::new(String::from("Unit")), Kind::Star)
+}
+
+pub type Substitution = HashMap<Var, Type>;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Constraint {
+    /// t1 == t2
+    Equality(Type, Type),
+    /// t1 is an instance of t2
+    InstanceOf(Type, HashSet<Var>, Type),
+}
+
 pub trait Apply {
-    fn apply(&self, s: Substitution) -> Self;
+    fn apply(&self, s: &Substitution) -> Self;
 }
 
 impl Apply for Type {
-    fn apply(&self, s: Substitution) -> Type {
+    fn apply(&self, s: &Substitution) -> Self {
         match self {
-            Type::Variable(v) => s.get(v).cloned().unwrap_or_else(|| self.clone()),
-            Type::Arrow(l, r) => Type::Arrow(Box::new(l.apply(s.clone())), Box::new(r.apply(s))),
-            Type::Constructor(_) => self.clone(),
-            Type::Record(r) => Type::Record(
-                r.iter()
-                    .map(|(k, v)| (k.clone(), v.apply(s.clone())))
+            Type::Constant(_, _) => self.clone(),
+            Type::Variable(var, kind) => {
+                if let Some(t) = s.get(var) {
+                    t.clone()
+                } else {
+                    self.clone()
+                }
+            }
+            Type::Arrow(left, right) => {
+                Type::Arrow(Rc::new(left.apply(s)), Rc::new(right.apply(s)))
+            }
+            Type::Tuple(tuple) => Type::Tuple(tuple.iter().map(|t| t.apply(s)).collect()),
+            Type::Record(record) => Type::Record(
+                record
+                    .iter()
+                    .map(|(var, t)| (var.clone(), t.apply(s)))
                     .collect(),
             ),
-            Type::Tuple(t) => Type::Tuple(t.iter().map(|t| t.apply(s.clone())).collect()),
+            Type::Application(left, right) => {
+                Type::Application(Rc::new(left.apply(s)), Rc::new(right.apply(s)))
+            }
+        }
+    }
+}
+
+impl Apply for Constraint {
+    fn apply(&self, s: &Substitution) -> Self {
+        match self {
+            Self::Equality(left, right) => Self::Equality(left.apply(s), right.apply(s)),
+            Self::InstanceOf(sub, m, sup) => Self::InstanceOf(
+                sub.apply(s),
+                m.iter()
+                    .map(|v| Type::Variable(v.clone(), Kind::Star).apply(&s))
+                    .flat_map(|t| t.variables())
+                    .collect(),
+                sup.apply(s),
+            ),
         }
     }
 }
 
 impl Apply for Expr<Type> {
-    fn apply(&self, s: Substitution) -> Self {
+    fn apply(&self, s: &Substitution) -> Self {
         match self {
-            Expr::Function(pattern, body, pattern_type) => Expr::Function(pattern.clone(), Box::new(body.apply(s.clone())), pattern_type.apply(s)),
-            Expr::Application(left, right, app_type) => Expr::Application(Box::new(left.apply(s.clone())), Box::new(right.apply(s.clone())), app_type.apply(s)),
-            Expr::Number(_) |
-            Expr::Boolean(_) => self.clone(),
-            Expr::Operator(op, op_type) => Expr::Operator(*op, op_type.apply(s)),
+            Expr::Function(pattern, body, pattern_type) => Expr::Function(
+                pattern.clone(),
+                Box::new(body.apply(s)),
+                pattern_type.apply(s),
+            ),
+            Expr::Application(left, right, app_type) => Expr::Application(
+                Box::new(left.apply(s)),
+                Box::new(right.apply(s)),
+                app_type.apply(s),
+            ),
+            Expr::Number(n) => Expr::Number(*n),
+            Expr::Boolean(b) => Expr::Boolean(*b),
+            Expr::Operator(operator, operator_type) => {
+                Expr::Operator(*operator, operator_type.apply(s))
+            }
             Expr::Variable(var, var_type) => Expr::Variable(var.clone(), var_type.apply(s)),
-            Expr::Record(record) => Expr::Record(record.iter().map(|(var, val)| (var.clone(), val.apply(s.clone()))).collect()),
-            Expr::If(pred, con, alt) => Expr::If(Box::new(pred.apply(s.clone())), Box::new(con.apply(s.clone())), Box::new(alt.apply(s))),
-            Expr::Block(block) => Expr::Block(block.iter().map(|statement| statement.apply(s.clone())).collect()),
-            Expr::Tuple(tuple) => Expr::Tuple(tuple.iter().map(|expr| expr.apply(s.clone())).collect()),
-            Expr::Constructor(cons, cons_type) => Expr::Constructor(cons.clone(), cons_type.apply(s)),
+            Expr::Record(record) => Expr::Record(
+                record
+                    .iter()
+                    .map(|(var, val)| (var.clone(), val.apply(s)))
+                    .collect(),
+            ),
+            Expr::Tuple(tuple) => Expr::Tuple(tuple.iter().map(|val| val.apply(s)).collect()),
+            Expr::Constructor(cons, cons_type) => {
+                Expr::Constructor(cons.clone(), cons_type.apply(s))
+            }
+            Expr::If(pred, cons, altr) => Expr::If(
+                Box::new(pred.apply(s)),
+                Box::new(cons.apply(s)),
+                Box::new(altr.apply(s)),
+            ),
+            Expr::Block(block) => {
+                Expr::Block(block.iter().map(|statement| statement.apply(s)).collect())
+            }
             Expr::Match(_, _) => todo!(),
         }
     }
 }
 
 impl Apply for Statement<Type> {
-    fn apply(&self, s: Substitution) -> Self {
+    fn apply(&self, s: &Substitution) -> Self {
         match self {
-            Statement::Let(pattern, body, pattern_type) => Statement::Let(pattern.clone(), body.apply(s.clone()), pattern_type.apply(s)),
+            Statement::Let(pattern, body, pattern_type) => {
+                Statement::Let(pattern.clone(), body.apply(s), pattern_type.apply(s))
+            }
             Statement::Raw(expr) => Statement::Raw(expr.apply(s)),
-            Statement::TypeDef(_, _) => self.clone(),
-        }
-    }
-}
-
-pub trait Free {
-    fn free_type_vars(&self) -> HashSet<TypeVar>;
-}
-
-impl Free for Type {
-    fn free_type_vars(&self) -> HashSet<TypeVar> {
-        match self {
-            Type::Variable(v) => HashSet::unit(v.clone()),
-            Type::Arrow(e1, e2) => e1.free_type_vars().union(e2.free_type_vars()),
-            Type::Record(r) => r.values().flat_map(Free::free_type_vars).collect(),
-            Type::Tuple(t) => t.iter().flat_map(Free::free_type_vars).collect(),
-            Type::Constructor(_) => HashSet::new()
-        }
-    }
-}
-
-impl Free for Scheme {
-    fn free_type_vars(&self) -> HashSet<TypeVar> {
-        self.1.free_type_vars().relative_complement(self.0.clone())
-    }
-}
-
-impl fmt::Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Type::Variable(v) => write!(f, "{}", v),
-            Type::Arrow(l, r) => write!(f, "({} -> {})", *l, *r),
-            Type::Constructor(c) => c.fmt(f),
-            Type::Record(r) => {
-                write!(f, "{{")?;
-                for (i, (val, var)) in r.iter().enumerate() {
-                    write!(f, "{}: {}", val, var)?;
-                    if i != r.len() - 1 {
-                        write!(f, ", ")?;
-                    }
-                }
-                write!(f, "}}")?;
-                Ok(())
-            },
-            Type::Tuple(ts) => {
-                write!(f, "(")?;
-                for (i, t) in ts.iter().enumerate() {
-                    write!(f, "{}", t)?;
-                    if i != ts.len() - 1 {
-                        write!(f, ", ")?;
-                    }
-                }
-                write!(f, ")")?;
-                Ok(())
+            Statement::TypeDef(name, tvs, body) => {
+                Statement::TypeDef(name.clone(), tvs.clone(), body.clone())
             }
         }
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Scheme(pub HashSet<String>, pub Type);
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Kind {
+    Star,
+    Arrow(Box<Kind>, Box<Kind>),
+}
 
-impl Scheme {
-    pub fn instantiate(&self, free: &GenState) -> Type {
-        let new_tvs = self
-            .0
-            .iter()
-            .map(|old| (old.clone(), Type::Variable(free.fresh())))
-            .collect();
-        self.1.apply(new_tvs)
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct KindError {
+    got_type: Type,
+    type_kind: Kind,
+    expected_kind: Kind,
+}
+
+/// this is a 100% unironic function name.
+/// all_star checks if all of the kinds in an iterator are *
+fn all_star<'a>(i: impl Iterator<Item = &'a Type>) -> Result<(), KindError> {
+    for t in i {
+        let k = Kind::check(&t)?;
+        if k != Kind::Star {
+            return Err(KindError {
+                got_type: t.clone(),
+                type_kind: k,
+                expected_kind: Kind::Star,
+            });
+        }
+    }
+    Ok(())
+}
+
+impl Kind {
+    /// infer the kind of a type, returning a KindError if the type is invalid
+    pub fn check(t: &Type) -> Result<Kind, KindError> {
+        match t {
+            Type::Variable(var, kind) => Ok(kind.clone()),
+            Type::Constant(var, kind) => Ok(kind.clone()),
+            Type::Application(left, right) => match Kind::check(left)? {
+                Kind::Star => Err(KindError {
+                    got_type: left.as_ref().clone(),
+                    type_kind: Kind::Star,
+                    expected_kind: Kind::Arrow(Box::new(Kind::check(right)?), Box::new(Kind::Star)),
+                }),
+                Kind::Arrow(k1, k2) => {
+                    let k3 = Kind::check(right)?;
+                    if &k3 == k1.as_ref() {
+                        Ok(*k2)
+                    } else {
+                        Err(KindError {
+                            got_type: left.as_ref().clone(),
+                            type_kind: Kind::Arrow(k1, k2),
+                            expected_kind: Kind::Arrow(Box::new(k3), Box::new(Kind::Star)),
+                        })
+                    }
+                }
+            },
+            Type::Tuple(tuple) => {
+                let () = all_star(tuple.iter())?;
+                Ok(Kind::Star)
+            }
+            Type::Record(record) => {
+                let () = all_star(record.values())?;
+                Ok(Kind::Star)
+            }
+            Type::Arrow(left, right) => {
+                let () = all_star(vec![left.as_ref(), right.as_ref()].into_iter())?;
+                Ok(Kind::Star)
+            }
+        }
     }
 }
 
-pub type Substitution = HashMap<TypeVar, Type>;
-
-pub fn combine(s1: Substitution, s2: Substitution) -> Substitution {
-    let mut s3: Substitution = s2
-        .into_iter()
-        .map(|(u, t)| (u, t.apply(s1.clone())))
-        .collect();
-    s3.extend(s1);
-
-    s3
+#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
+pub enum TypeError {
+    InfiniteType(Type, Type),
+    Kind(KindError),
+    KindMismatch(Type, Type),
+    ConstructorMismatch(Var, Var),
+    TypeMismatch(Type, Type),
+    MissingField(String),
+    UnknownVariant(String),
+    NoSolvableConstraints,
 }
 
-impl fmt::Display for Scheme {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "forall {:?}. {}", self.0, self.1)
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    #[test]
-    fn free_tv_mono() {
-        assert_eq!(
-            num_type().free_type_vars(),
-            HashSet::new()
-        );
-        assert_eq!(
-            Type::Variable(String::from("0")).free_type_vars(),
-            HashSet::unit(String::from("0"))
-        );
-        assert_eq!(
-            Type::Arrow(
-                Box::new(Type::Variable(String::from("0"))),
-                Box::new(Type::Variable(String::from("1")))
-            )
-            .free_type_vars(),
-            HashSet::unit(String::from("0")).update(String::from("1"))
-        );
-    }
-    #[test]
-    fn free_tv_poly() {
-        assert_eq!(
-            Scheme(
-                HashSet::unit(String::from("0")),
-                Type::Arrow(
-                    Box::new(Type::Variable(String::from("0"))),
-                    Box::new(Type::Variable(String::from("1")))
-                )
-            )
-            .free_type_vars(),
-            HashSet::unit(String::from("1"))
-        );
-        assert_eq!(
-            Scheme(
-                HashSet::unit(String::from("0")),
-                Type::Arrow(
-                    Box::new(Type::Variable(String::from("0"))),
-                    Box::new(Type::Variable(String::from("1")))
-                )
-            )
-            .free_type_vars(),
-            HashSet::unit(String::from("1"))
-        );
+impl Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Type::Constant(s, _) | Type::Variable(s, _) => s.fmt(f),
+            Type::Arrow(left, right) => write!(f, "({} -> {})", left, right),
+            Type::Tuple(tuple) => {
+                write!(f, "(")?;
+                for val in tuple {
+                    write!(f, "{},", val)?;
+                }
+                write!(f, ")")
+            }
+            Type::Record(record) => {
+                write!(f, "{{")?;
+                for (var, val) in record {
+                    write!(f, "{}: {},", var, val)?;
+                }
+                write!(f, "}}")
+            }
+            Type::Application(left, right) => write!(f, "({} {})", left, right),
+        }
     }
 }
