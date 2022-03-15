@@ -1,0 +1,16 @@
+[package]
+name = "expr"
+version = "0.1.0"
+edition = "2021"
+
+
+[lib]
+name = "expr"
+bench = false
+
+
+[dependencies]
+chumsky = "0.8.0"
+im = "15.0.0"
+rand = "0.8.4"
+

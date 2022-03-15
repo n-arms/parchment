@@ -1,7 +1,7 @@
 use im::HashMap;
 use std::fmt;
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum Type {
     I32,
     I64,
@@ -18,7 +18,7 @@ impl Type {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Copy, Clone, Debug)]
 pub enum Value {
     I32(i32),
     I64(i64),
@@ -285,11 +285,11 @@ pub struct WATFormatter {
 
 impl WATFormatter {
     pub fn line(&mut self, text: impl AsRef<str>) {
-        self.lines.push((self.indent, text.as_ref().to_string()))
+        self.lines.push((self.indent, text.as_ref().to_owned()));
     }
     pub fn lines(&mut self, text: Vec<impl AsRef<str>>) {
         for line in text {
-            self.line(line)
+            self.line(line);
         }
     }
     pub fn inc(&mut self) {

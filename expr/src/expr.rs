@@ -1,5 +1,4 @@
-use super::gen::State;
-use super::types::{bool_type, num_type, unit_type, Kind, Type, TypeError, Var, Variant};
+use super::types::{bool_type, num_type, unit_type, Fresh, Kind, Type, TypeError, Var, Variant};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
@@ -14,53 +13,6 @@ pub enum Pattern {
     Construction(String, Vec<Pattern>),
 }
 
-impl Pattern {
-    /// create a mapping from vars to types, and return a type representing the pattern
-    pub fn type_pattern(&self, st: &State) -> Result<(HashMap<String, Var>, Type), TypeError> {
-        match self {
-            Pattern::Variable(v) => {
-                let b = st.fresh();
-                Ok((
-                    HashMap::unit(v.clone(), b.clone()),
-                    Type::Variable(b, Kind::Star),
-                ))
-            }
-            Pattern::Record(r) => {
-                let mut bindings = HashMap::new();
-                let mut record = HashMap::new();
-                for (var, val) in r {
-                    let (b, t) = val.type_pattern(st)?;
-                    bindings.extend(b);
-                    record.insert(var.clone(), t);
-                }
-                Ok((bindings, Type::Record(record)))
-            }
-            Pattern::Tuple(ps) => {
-                let mut bindings = HashMap::new();
-                let mut terms = Vec::new();
-                for p in ps {
-                    let (b1, p1) = p.type_pattern(st)?;
-                    bindings.extend(b1);
-                    terms.push(p1);
-                }
-                Ok((bindings, Type::Tuple(terms)))
-            }
-            Pattern::Construction(name, ps) => {
-                todo!()
-            }
-        }
-    }
-
-    pub fn bound_vars(&self) -> HashSet<String> {
-        match self {
-            Pattern::Variable(v) => HashSet::unit(v.clone()),
-            Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
-            Pattern::Construction(_, t) | Pattern::Tuple(t) => {
-                t.iter().flat_map(Pattern::bound_vars).collect()
-            }
-        }
-    }
-}
 #[derive(Clone, Debug)]
 pub enum Expr<A> {
     /// a function with a domain of type A
@@ -96,11 +48,8 @@ impl Expr<Type> {
             ),
             Expr::If(_, expr, _) => expr.get_type(),
             Expr::Match(_, _) => todo!(),
-            Expr::Block(block) => block
-                .last()
-                .map(Statement::get_type)
-                .unwrap_or_else(|| unit_type()),
-            Expr::Tuple(tuple) => Type::Tuple(tuple.iter().map(|val| val.get_type()).collect()),
+            Expr::Block(block) => block.last().map_or_else(unit_type, Statement::get_type),
+            Expr::Tuple(tuple) => Type::Tuple(tuple.iter().map(Expr::get_type).collect()),
             Expr::Operator(_, t) | Expr::Constructor(_, t) | Expr::Variable(_, t) => t.clone(),
         }
     }
@@ -188,7 +137,7 @@ impl<A: cmp::PartialEq> cmp::PartialEq for Expr<A> {
             }
             Expr::Number(i) => {
                 if let Expr::Number(j) = other {
-                    (i - j).abs() < 0.0001
+                    (i - j).abs() < 0.0001_f64
                 } else {
                     false
                 }
@@ -279,9 +228,9 @@ fn show_tailing_fn(margin: usize, e: &Expr<Type>) -> String {
     }
 }
 
-fn show_expr(margin: usize, e: &Expr<Type>) -> String {
+fn show_expr(margin: usize, expr: &Expr<Type>) -> String {
     let margin_str: String = vec![' '; margin * 2].iter().collect();
-    match e {
+    match expr {
         Expr::Application(l, r, _) => format!(
             "{} {}",
             format!("({})", show_expr(margin, l)),
@@ -336,7 +285,7 @@ fn show_expr(margin: usize, e: &Expr<Type>) -> String {
                 acc
             })
         ),
-        Expr::Operator(o, _) => String::from(o.to_string()),
+        Expr::Operator(o, _) => o.to_string(),
         e => format!("fn {}", show_tailing_fn(margin, e)),
     }
 }
@@ -425,7 +374,7 @@ impl fmt::Display for Expr<Type> {
 impl Expr<()> {
     #[allow(dead_code)]
     fn rand(from_num: fn(usize) -> String) -> Self {
-        match rand::thread_rng().gen::<u8>() >> 6 {
+        match rand::thread_rng().gen::<u8>() % 4 {
             0 => Expr::Application(
                 Box::new(Expr::rand(from_num)),
                 Box::new(Expr::rand(from_num)),
@@ -434,7 +383,7 @@ impl Expr<()> {
             1 => Expr::Function(Pattern::rand(from_num), Box::new(Expr::rand(from_num)), ()),
             2 => Expr::Number(rand::thread_rng().gen()),
             3 => Expr::Variable(from_num(rand::thread_rng().gen()), ()),
-            _ => panic!(),
+            _ => unreachable!(),
         }
     }
 }
@@ -451,6 +400,57 @@ impl fmt::Display for Pattern {
 }
 
 impl Pattern {
+    /// Return the most specific type that can be infered for the pattern, as well as a mapping
+    /// from variable names to type variables.
+    ///
+    /// # Errors
+    /// Currently `type_pattern` will not return an error, but when support for variants is added,
+    /// it will return an error if it comes across an unknown variant.
+    pub fn type_pattern(&self, st: &Fresh) -> Result<(HashMap<String, Var>, Type), TypeError> {
+        match self {
+            Pattern::Variable(v) => {
+                let b = Rc::new(st.fresh().to_string());
+                Ok((
+                    HashMap::unit(v.clone(), Rc::clone(&b)),
+                    Type::Variable(b, Kind::Star),
+                ))
+            }
+            Pattern::Record(r) => {
+                let mut bindings = HashMap::new();
+                let mut record = HashMap::new();
+                for (var, val) in r {
+                    let (b, t) = val.type_pattern(st)?;
+                    bindings.extend(b);
+                    record.insert(var.clone(), t);
+                }
+                Ok((bindings, Type::Record(record)))
+            }
+            Pattern::Tuple(ps) => {
+                let mut bindings = HashMap::new();
+                let mut terms = Vec::new();
+                for p in ps {
+                    let (b1, p1) = p.type_pattern(st)?;
+                    bindings.extend(b1);
+                    terms.push(p1);
+                }
+                Ok((bindings, Type::Tuple(terms)))
+            }
+            Pattern::Construction(..) => {
+                todo!()
+            }
+        }
+    }
+
+    pub fn bound_vars(&self) -> HashSet<String> {
+        match self {
+            Pattern::Variable(v) => HashSet::unit(v.clone()),
+            Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
+            Pattern::Construction(_, t) | Pattern::Tuple(t) => {
+                t.iter().flat_map(Pattern::bound_vars).collect()
+            }
+        }
+    }
+
     fn rand(from_num: fn(usize) -> String) -> Self {
         Pattern::Variable(from_num(thread_rng().gen()))
     }

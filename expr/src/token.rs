@@ -72,7 +72,7 @@ impl cmp::PartialEq for Token {
             }
             Token::Number(i) => {
                 if let Token::Number(j) = other {
-                    (i - j).abs() < 0.0001
+                    (i - j).abs() < 0.0001_f64
                 } else {
                     false
                 }
@@ -135,7 +135,7 @@ impl std::hash::Hash for Token {
             Token::Constructor(_) => 28,
             Token::Pipe => 29,
             Token::Type => 30,
-        }])
+        }]);
     }
 }
 

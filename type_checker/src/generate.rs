@@ -1,5 +1,7 @@
-use super::expr::*;
-use super::types::*;
+use expr::{
+    expr::{Expr, Pattern, Statement},
+    types::{bool_type, Constraint, Fresh, Kind, Type, TypeDef, TypeError, Var},
+};
 use im::{HashMap, HashSet};
 use std::cell::RefCell;
 use std::fmt::Display;
@@ -48,10 +50,14 @@ impl State {
         ));
     }
 
+    pub fn type_vars(&self) -> &Fresh {
+        &self.fresh_type_vars
+    }
+
     pub fn add_monotonic_type_vars(&self, tvs: HashSet<Var>) -> Self {
         State {
             fresh_type_vars: self.fresh_type_vars.clone(),
-            constraints: self.constraints.clone(),
+            constraints: Rc::clone(&self.constraints),
             type_defs: self.type_defs.clone(),
             variants: self.variants.clone(),
             monotonic_type_vars: self.monotonic_type_vars.clone().union(tvs),
@@ -61,8 +67,11 @@ impl State {
     pub fn define_type(&self, name: String, type_def: TypeDef) -> Self {
         State {
             fresh_type_vars: self.fresh_type_vars.clone(),
-            constraints: self.constraints.clone(),
-            monotonic_type_vars: self.monotonic_type_vars.clone().update(Rc::new(name.clone())),
+            constraints: Rc::clone(&self.constraints),
+            monotonic_type_vars: self
+                .monotonic_type_vars
+                .clone()
+                .update(Rc::new(name.clone())),
             variants: type_def
                 .variants
                 .iter()
@@ -78,13 +87,18 @@ impl State {
         let result_kind = type_def
             .polymorphic_vars
             .iter()
-            .rfold(Kind::Star, |base, _| Kind::Arrow(Box::new(Kind::Star), Box::new(base)));
-        let result_type = type_def
-            .polymorphic_vars
-            .iter()
-            .fold(Type::Variable(Rc::new(type_name.clone()), result_kind), |total, var| {
-                Type::Application(Rc::new(total), Rc::new(Type::Variable(var.0.clone(), var.1.clone())))
+            .rfold(Kind::Star, |base, _| {
+                Kind::Arrow(Box::new(Kind::Star), Box::new(base))
             });
+        let result_type = type_def.polymorphic_vars.iter().fold(
+            Type::Variable(Rc::new(type_name.clone()), result_kind),
+            |total, var| {
+                Type::Application(
+                    Rc::new(total),
+                    Rc::new(Type::Variable(Rc::clone(&var.0), var.1.clone())),
+                )
+            },
+        );
         let variant = type_def
             .variants
             .iter()
@@ -94,10 +108,15 @@ impl State {
         }))
     }
 
+    /// Annotates an untyped expression with types, and generates the constraints on those types.
+    ///
+    /// # Errors
+    /// `generate` will return an error of it encounters an unknown variant
+    #[allow(clippy::too_many_lines)]
     pub fn generate(&self, e: &Expr<()>) -> Result<(HashSet<Assumption>, Expr<Type>), TypeError> {
         match e {
             Expr::Function(pattern, body, ()) => {
-                let (bindings, typed_pattern) = pattern.type_pattern(self)?;
+                let (bindings, typed_pattern) = pattern.type_pattern(self.type_vars())?;
 
                 let (mut a1, typed_body) = self
                     .add_monotonic_type_vars(
@@ -108,8 +127,8 @@ impl State {
                 for Assumption(v, tv) in &a1 {
                     if let Some(tv2) = bindings.get(v) {
                         self.equate(
-                            Type::Variable(tv.clone(), Kind::Star),
-                            Type::Variable(tv2.clone(), Kind::Star),
+                            Type::Variable(Rc::clone(tv), Kind::Star),
+                            Type::Variable(Rc::clone(tv2), Kind::Star),
                         );
                     }
                 }
@@ -132,7 +151,7 @@ impl State {
                     typed_left.get_type(),
                     Type::Arrow(
                         Rc::new(typed_right.get_type()),
-                        Rc::new(Type::Variable(beta.clone(), Kind::Star)),
+                        Rc::new(Type::Variable(Rc::clone(&beta), Kind::Star)),
                     ),
                 );
                 Ok((
@@ -152,7 +171,7 @@ impl State {
             )),
             Expr::Variable(var, ()) => {
                 let beta = self.fresh();
-                let a = HashSet::unit(Assumption(var.clone(), beta.clone()));
+                let a = HashSet::unit(Assumption(var.clone(), Rc::clone(&beta)));
                 Ok((
                     a,
                     Expr::Variable(var.clone(), Type::Variable(beta, Kind::Star)),
@@ -212,7 +231,7 @@ impl State {
             Expr::Constructor(constructor, ()) => {
                 let cons_type = self
                     .lookup_variant(constructor)
-                    .ok_or(TypeError::UnknownVariant(constructor.clone()))?;
+                    .ok_or_else(|| TypeError::UnknownVariant(constructor.clone()))?;
                 let beta = Type::Variable(self.fresh(), Kind::Star);
                 self.instance(cons_type, beta.clone());
                 Ok((HashSet::new(), Expr::Constructor(constructor.clone(), beta)))
@@ -243,15 +262,15 @@ impl State {
                 let (a1, typed_body) = self.generate(body)?;
                 let (mut a2, mut typed_rest) = self.generate_block(rest)?;
                 self.equate(
-                    Type::Variable(beta.clone(), Kind::Star),
+                    Type::Variable(Rc::clone(&beta), Kind::Star),
                     typed_body.get_type(),
                 );
 
                 for Assumption(var1, tv) in &a2 {
                     if var1 == var {
                         self.instance(
-                            Type::Variable(beta.clone(), Kind::Star),
-                            Type::Variable(tv.clone(), Kind::Star),
+                            Type::Variable(Rc::clone(&beta), Kind::Star),
+                            Type::Variable(Rc::clone(tv), Kind::Star),
                         );
                     }
                 }
@@ -264,14 +283,14 @@ impl State {
                     Statement::Let(
                         Pattern::Variable(var.clone()),
                         typed_body,
-                        Type::Variable(beta.clone(), Kind::Star),
+                        Type::Variable(beta, Kind::Star),
                     ),
                 );
 
                 Ok((a2, typed_rest))
             }
             [Statement::Let(pattern, body, ()), rest @ ..] => {
-                let (bindings, typed_pattern) = pattern.type_pattern(self)?;
+                let (bindings, typed_pattern) = pattern.type_pattern(self.type_vars())?;
                 let (a1, typed_body) = self.generate(body)?;
                 let (mut a2, mut typed_rest) = self.generate_block(rest)?;
 
@@ -280,8 +299,8 @@ impl State {
                 for Assumption(var, tv1) in &a2 {
                     if let Some(tv2) = bindings.get(var) {
                         self.instance(
-                            Type::Variable(tv2.clone(), Kind::Star),
-                            Type::Variable(tv1.clone(), Kind::Star),
+                            Type::Variable(Rc::clone(tv2), Kind::Star),
+                            Type::Variable(Rc::clone(tv1), Kind::Star),
                         );
                     }
                 }
@@ -302,7 +321,7 @@ impl State {
                     TypeDef {
                         polymorphic_vars: type_vars
                             .iter()
-                            .map(|var| (var.clone(), Kind::Star))
+                            .map(|var| (Rc::clone(var), Kind::Star))
                             .collect(),
                         variants: variants.clone(),
                     },
@@ -318,7 +337,9 @@ impl Display for State {
         for cons in self.constraints.borrow().iter() {
             match cons {
                 Constraint::Equality(left, right) => writeln!(f, "  {} = {}", left, right),
-                Constraint::InstanceOf(sub, m, sup) => writeln!(f, "  {} < {} [{:?}]", sub, sup, m),
+                Constraint::InstanceOf(sub_type, m, super_type) => {
+                    writeln!(f, "  {} < {} [{:?}]", sub_type, super_type, m)
+                }
             }?;
         }
         writeln!(f, "}}")?;

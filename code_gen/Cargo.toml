@@ -1,0 +1,14 @@
+[package]
+name = "code_gen"
+version = "0.1.0"
+edition = "2021"
+
+
+[lib]
+name = "code_gen"
+bench = false
+
+[dependencies]
+im = "15.0.0"
+rand = "0.8.4"
+expr = { path = "../expr" }

@@ -20,6 +20,10 @@ use super::types::{bool_type, num_type, Kind, Type, Variant};
 use chumsky::prelude::*;
 use std::rc::Rc;
 
+/// `parse` will use a chumsky parser to turn a token slice into an untyped abstract syntax tree
+/// # Errors
+/// `parse` will only parse valid Parchment expressions. If an invalid token slice is given, it
+/// will return a parse error
 pub fn parse(t: &[Token]) -> Result<Expr<()>, Vec<Simple<Token>>> {
     parser().parse(t)
 }
@@ -39,6 +43,7 @@ fn record<L, R>(
     field_list.delimited_by(just(Token::LBrace), just(Token::RBrace))
 }
 
+#[allow(clippy::too_many_lines)]
 fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
     recursive(|expr| {
         let constant = select!(
@@ -76,8 +81,8 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
 
         let variant = constructor
             .then(typ.clone().repeated())
-            .map(|(constructor, fields)| Variant {
-                constructor,
+            .map(|(name, fields)| Variant {
+                constructor: name,
                 fields,
             });
 
@@ -116,7 +121,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             .or(expr.clone().map(Statement::Raw))
             .then_ignore(just(Token::Semicolon))
             .or(just(Token::Type)
-                .ignore_then(variable.clone())
+                .ignore_then(variable)
                 .then(variable.map(Rc::new).repeated())
                 .then_ignore(just(Token::Eqs))
                 .then(variant.clone())
@@ -158,17 +163,15 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                 Expr::Tuple(terms)
             });
 
-        let atom = recursive(|atom| {
-            parens
-                .or(function)
-                .or(constant)
-                .or(record_lit)
-                .or(block)
-                .or(if_)
-                .or(tuple)
-                .or(constructor.map(|c| Expr::Constructor(c, ())))
-                .or(variable.map(|v| Expr::Variable(v, ())))
-        });
+        let atom = parens
+            .or(function)
+            .or(constant)
+            .or(record_lit)
+            .or(block)
+            .or(if_)
+            .or(tuple)
+            .or(constructor.map(|c| Expr::Constructor(c, ())))
+            .or(variable.map(|v| Expr::Variable(v, ())));
 
         let make_times = make_bin!(Operator::Times);
         let product = atom
@@ -189,28 +192,28 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             )
             .foldl(|l, (f, r)| f(l, r));
 
-        let make_lt = make_bin!(Operator::LessThan);
-        let make_lte = make_bin!(Operator::LessThanEqual);
-        let make_gt = make_bin!(Operator::GreaterThan);
-        let make_gte = make_bin!(Operator::GreaterThanEqual);
+        let less_than = make_bin!(Operator::LessThan);
+        let less_than_equals = make_bin!(Operator::LessThanEqual);
+        let greater_than = make_bin!(Operator::GreaterThan);
+        let greater_than_equals = make_bin!(Operator::GreaterThanEqual);
 
         let cmp = sum
             .clone()
             .then(
                 just(Token::LessThan)
-                    .to(make_lt)
-                    .or(just(Token::LessThanEquals).to(make_lte))
-                    .or(just(Token::GreaterThan).to(make_gt))
-                    .or(just(Token::GreaterThanEquals).to(make_gte))
+                    .to(less_than)
+                    .or(just(Token::LessThanEquals).to(less_than_equals))
+                    .or(just(Token::GreaterThan).to(greater_than))
+                    .or(just(Token::GreaterThanEquals).to(greater_than_equals))
                     .then(sum)
                     .repeated(),
             )
             .foldl(|l, (f, r)| f(l, r));
 
-        let make_eqs = make_bin!(Operator::Equals);
+        let equals = make_bin!(Operator::Equals);
         let eqs = cmp
             .clone()
-            .then(just(Token::DoubleEqs).to(make_eqs).then(cmp).repeated())
+            .then(just(Token::DoubleEqs).to(equals).then(cmp).repeated())
             .foldl(|l, (f, r)| f(l, r));
 
         eqs.clone()

@@ -1,24 +1,35 @@
-mod codegen;
-mod expr;
-mod gen;
-mod lexer;
-mod lift;
-mod parser;
-mod solve;
-mod sub;
-mod token;
-mod types;
-mod wasm;
+#![warn(clippy::all, clippy::pedantic, clippy::restriction)]
+#![allow(
+    clippy::missing_docs_in_private_items,
+    clippy::implicit_return,
+    clippy::shadow_reuse,
+    clippy::print_stdout,
+    clippy::wildcard_enum_match_arm,
+    clippy::else_if_without_else,
+    clippy::integer_arithmetic,
+    clippy::cast_lossless,
+    clippy::unreachable,
+    clippy::cast_possible_wrap,
+    clippy::as_conversions,
+    clippy::use_debug,
+    clippy::self_named_module_files
+)]
 
-use codegen::emit_program;
-use lift::lift;
-use parser::parse;
-use solve::solve;
+use code_gen::{
+    code_gen::emit_program,
+    lift::lift,
+    wasm::{WATFormatter, Wasm},
+};
+use expr::{
+    expr::Expr,
+    lexer::scan,
+    parser::parse,
+    types::{Apply, Type},
+};
 use std::fs::write;
 use std::io::{self, BufRead};
 use std::process::{Command, Output};
-use types::{Apply, Type};
-use wasm::WATFormatter;
+use type_checker::{generate, solve, solve::solve};
 
 fn read_ast(first: String, lines: &mut impl Iterator<Item = String>) -> String {
     let mut out = String::new();
@@ -43,27 +54,29 @@ pub struct ReplState {
     eval: bool,
 }
 
-fn process_text(lines: String, state: &ReplState) {
-    let ast = match parse(&lexer::scan(&lines)) {
-        Ok(a) => a,
+fn parse_ast(lines: &str) -> Option<Expr<()>> {
+    match parse(&scan(lines)) {
+        Ok(a) => Some(a),
         Err(es) => {
             for e in es {
                 println!("{:?}", e);
             }
-            return;
+            None
         }
-    };
+    }
+}
 
-    let st = gen::State::default();
-    let (a, ast) = match st.generate(&ast) {
+fn infer_types(ast: &Expr<()>, debug: bool) -> Option<Expr<Type>> {
+    let st = generate::State::default();
+    let (a, ast) = match st.generate(ast) {
         Ok(s) => s,
         Err(e) => {
             println!("{:?}", e);
-            return;
+            return None;
         }
     };
 
-    if state.type_debug {
+    if debug {
         println!("{}\nbase type\n\t{}", st, ast.get_type());
     }
 
@@ -72,20 +85,20 @@ fn process_text(lines: String, state: &ReplState) {
         for assum in a {
             println!("{}", assum);
         }
-        return;
+        return None;
     }
 
     let (type_vars, constraints) = st.extract();
 
-    let s = match solve(constraints, solve::State::new(type_vars)) {
+    let s = match solve(&constraints, solve::State::new(type_vars)) {
         Ok(cs) => cs,
         Err(e) => {
             println!("{:?}", e);
-            return;
+            return None;
         }
     };
 
-    if state.type_debug {
+    if debug {
         println!("\nsubstitutions");
         for (tv, t) in &s {
             println!("\t{} => {}", tv, t);
@@ -95,27 +108,26 @@ fn process_text(lines: String, state: &ReplState) {
 
     let final_expr = ast.apply(&s);
     println!(":: {}", final_expr.get_type());
+    Some(final_expr)
+}
 
-    if !state.eval {
-        return;
-    }
+fn generate_wasm(typed_ast: &Expr<Type>, debug: bool) -> Wasm {
+    let lifted = lift(typed_ast, &[], &mut code_gen::lift::State::default());
 
-    let lifted = match lift(&ast, &[], &mut lift::State::default()) {
-        Ok(l) => l,
-        Err(()) => return,
-    };
-
-    if state.lift_debug {
+    if debug {
         println!("{:#?}", lifted);
     }
 
-    let wasm = emit_program(lifted);
+    emit_program(lifted)
+}
+
+fn run_wasm(wasm: &Wasm, result_type: Type) -> Option<String> {
     let mut w = WATFormatter::default();
     wasm.format(&mut w);
 
     if let Err(e) = write("temp.wat", w.to_string()) {
         println!("{:?}", e);
-        return;
+        return None;
     }
 
     let Output {
@@ -125,12 +137,12 @@ fn process_text(lines: String, state: &ReplState) {
         Ok(o) => o,
         Err(e) => {
             println!("{:?}", e);
-            return;
+            return None;
         }
     };
     if !convert_status.success() {
         println!("wat2wasm failed, try running `wat2wasm temp.wat` on your own machine");
-        return;
+        return None;
     }
 
     let Output {
@@ -141,37 +153,47 @@ fn process_text(lines: String, state: &ReplState) {
         Ok(o) => o,
         Err(e) => {
             println!("{:?}", e);
-            return;
+            return None;
         }
     };
 
     if !run_status.success() {
         println!("failed to run the generated .wasm file, try running `node runwasm.js` on your own machine");
-        return;
+        return None;
     }
 
     let num = run_output
         .into_iter()
         .fold(0, |total, digit| total * 10 + (digit as u64 - 48));
 
-    println!(
-        "= {}",
-        match final_expr.get_type() {
-            Type::Arrow(_, _) => String::from("<fun>"),
-            Type::Constant(c, _) if c.as_ref() == "Num" =>
-                f64::from_ne_bytes(num.to_ne_bytes()).to_string(),
-            Type::Constant(c, _) if c.as_ref() == "Bool" =>
-                String::from(if num == 0 { "false" } else { "true" }),
-            Type::Constant(c, _) if c.as_ref() == "Unit" => String::from("()"),
-            _ => {
-                println!(
-                    "I don't know how to display the type {}",
-                    final_expr.get_type()
-                );
-                return;
-            }
+    Some(match result_type {
+        Type::Arrow(_, _) => String::from("<fun>"),
+        Type::Constant(c, _) if c.as_ref() == "Num" => {
+            f64::from_ne_bytes(num.to_ne_bytes()).to_string()
         }
-    );
+        Type::Constant(c, _) if c.as_ref() == "Bool" => {
+            String::from(if num == 0 { "false" } else { "true" })
+        }
+        Type::Constant(c, _) if c.as_ref() == "Unit" => String::from("()"),
+        _ => {
+            println!("I don't know how to display the type {}", result_type);
+            return None;
+        }
+    })
+}
+
+fn process_text(lines: &str, state: &ReplState) -> Option<()> {
+    let ast = parse_ast(lines)?;
+
+    let typed_ast = infer_types(&ast, state.type_debug)?;
+
+    let wasm = generate_wasm(&typed_ast, state.lift_debug);
+
+    if state.eval {
+        println!("= {}", run_wasm(&wasm, typed_ast.get_type())?);
+    }
+
+    Some(())
 }
 
 fn main() -> io::Result<()> {
@@ -209,7 +231,7 @@ fn main() -> io::Result<()> {
                 return Ok(());
             }
             _ => {
-                process_text(read_ast(next, &mut lines), &state);
+                process_text(&read_ast(next, &mut lines), &state);
             }
         }
     }
@@ -218,19 +240,20 @@ fn main() -> io::Result<()> {
 #[cfg(test)]
 mod test {
     use super::*;
+    use code_gen::lift;
 
     fn eval(text: &str) -> u64 {
-        let untyped = parse(&lexer::scan(text)).unwrap();
-        let state = gen::State::default();
+        let untyped = parse(&scan(text)).unwrap();
+        let state = generate::State::default();
         let (a, e1) = state.generate(&untyped).unwrap();
         assert!(a.is_empty());
 
         let (type_vars, constraints) = state.extract();
 
-        let sub = solve(constraints, solve::State::new(type_vars)).unwrap();
+        let sub = solve(&constraints, solve::State::new(type_vars)).unwrap();
 
         let typed = e1.apply(&sub);
-        let lifted = lift(&typed, &[], &mut lift::State::default()).unwrap();
+        let lifted = lift(&typed, &[], &mut lift::State::default());
         let wat = emit_program(lifted);
         let mut fmt = WATFormatter::default();
         wat.format(&mut fmt);

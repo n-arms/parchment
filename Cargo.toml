@@ -1,11 +1,23 @@
 [package]
-name = "scripter0"
+name = "parchment"
 version = "0.1.0"
 edition = "2018"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[[bin]]
+bench = false
+path = "core/main.rs"
+name = "parchment"
+
 
 [dependencies]
-chumsky = "0.8.0"
-im = "15.0.0"
-rand = "0.8.4"
+code_gen = { path = "./code_gen" }
+expr = { path = "./expr" }
+type_checker = { path = "./type_checker" }
+
+[workspace]
+members = [
+    "expr",
+    "type_checker",
+    "code_gen"
+]

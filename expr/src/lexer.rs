@@ -1,5 +1,6 @@
 use super::token::Token;
 
+#[allow(clippy::too_many_lines, clippy::expect_used)]
 pub fn scan(prog: &str) -> Vec<Token> {
     let raw_chars = prog.chars().collect::<Vec<_>>();
     let mut text = &raw_chars[..];
@@ -158,18 +159,28 @@ pub fn scan(prog: &str) -> Vec<Token> {
                         buf.push(text[0]);
                         text = &text[1..];
                     }
-                    out.push(if buf.chars().next().unwrap().is_ascii_uppercase() {
-                        Token::Constructor(buf)
-                    } else {
-                        Token::Identifier(buf)
-                    });
+                    out.push(
+                        if buf
+                            .chars()
+                            .next()
+                            .expect("the buffer can't be empty")
+                            .is_ascii_uppercase()
+                        {
+                            Token::Constructor(buf)
+                        } else {
+                            Token::Identifier(buf)
+                        },
+                    );
                 } else if c.is_numeric() {
                     let mut buf = String::new();
                     while !text.is_empty() && (text[0].is_numeric() || text[0] == '.') {
                         buf.push(text[0]);
                         text = &text[1..];
                     }
-                    out.push(Token::Number(buf.parse().unwrap()));
+                    out.push(Token::Number(
+                        buf.parse()
+                            .expect("constructed `buf` out of only numbers and '.'s"),
+                    ));
                 } else {
                     panic!("found illegal char")
                 }

@@ -1,5 +1,4 @@
-use super::gen;
-use super::types::{Apply, Constraint, Fresh, Kind, Substitution, Type, TypeError, Var};
+use expr::types::{Apply, Constraint, Fresh, Kind, Substitution, Type, TypeError, Var};
 use im::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -28,36 +27,47 @@ fn combine(s1: Substitution, s2: Substitution) -> Substitution {
     s3
 }
 
-/// solve a given set of constraints, producing a substitution
+/// Solves a set of constraints, producing a substitution
+///
+/// # Errors
+/// Will return a type error if a substitution cannot be constructed from the given constraints.
+/// This includes infinite types, type mismatches, kind mismatches, etc
 ///
 /// runs in O(n^2) time though there is probably an O(n log n) algorithm
-pub fn solve(cs: HashSet<Constraint>, type_vars: State) -> Result<Substitution, TypeError> {
+pub fn solve(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitution, TypeError> {
     if cs.is_empty() {
         return Ok(Substitution::default());
     }
-    let (c, cs) = next_solvable(cs)?;
+    let (solvable, rest) = next_solvable(cs)?;
 
-    match c {
+    match solvable {
         Constraint::Equality(t1, t2) => {
             let su1 = unify(&t1, &t2)?;
-            let su2 = solve(cs.into_iter().map(|c| c.apply(&su1)).collect(), type_vars)?;
+            let su2 = solve(
+                &rest.into_iter().map(|c| c.apply(&su1)).collect(),
+                type_vars,
+            )?;
             Ok(combine(su2, su1))
         }
-        Constraint::InstanceOf(sub, m, sup) => {
-            let sup_gen = sup.apply(
-                &sup.variables()
+        Constraint::InstanceOf(sub_type, m, super_type) => {
+            let super_gen = super_type.apply(
+                &super_type
+                    .variables()
                     .relative_complement(m)
                     .into_iter()
                     .map(|var| (var, Type::Variable(type_vars.fresh(), Kind::Star)))
                     .collect(),
             );
-            solve(cs.update(Constraint::Equality(sub, sup_gen)), type_vars)
+            solve(
+                &rest.update(Constraint::Equality(sub_type, super_gen)),
+                type_vars,
+            )
         }
     }
 }
 
-fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constraint>), TypeError> {
-    for c in &cs {
+fn next_solvable(cs: &HashSet<Constraint>) -> Result<(Constraint, HashSet<Constraint>), TypeError> {
+    for c in cs {
         match c {
             Constraint::Equality(..) => return Ok((c.clone(), cs.without(c))),
             Constraint::InstanceOf(_, m, sup) => {
@@ -83,28 +93,28 @@ fn next_solvable(cs: HashSet<Constraint>) -> Result<(Constraint, HashSet<Constra
 fn active_type_vars(c: &Constraint) -> HashSet<Var> {
     match c {
         Constraint::Equality(t1, t2) => t1.variables().union(t2.variables()),
-        Constraint::InstanceOf(sub, m, sup) => sub
+        Constraint::InstanceOf(sub_type, m, super_type) => sub_type
             .variables()
-            .union(m.clone().intersection(sup.variables())),
+            .union(m.clone().intersection(super_type.variables())),
     }
 }
 
 fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
     match (t1, t2) {
         (Type::Variable(v, k), t) | (t, Type::Variable(v, k)) => {
-            if t == &Type::Variable(v.clone(), k.clone()) {
+            if t == &Type::Variable(Rc::clone(v), k.clone()) {
                 Ok(HashMap::new())
             } else if t.variables().contains(v) {
                 Err(TypeError::InfiniteType(
                     t.clone(),
-                    Type::Variable(v.clone(), k.clone()),
+                    Type::Variable(Rc::clone(v), k.clone()),
                 ))
             } else {
-                Ok(HashMap::unit(v.clone(), t.clone()))
+                Ok(HashMap::unit(Rc::clone(v), t.clone()))
             }
         }
-        (Type::Application(l1, r1), Type::Application(l2, r2)) |
-        (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
+        (Type::Application(l1, r1), Type::Application(l2, r2))
+        | (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
             let s1 = unify(l1, l2)?;
             let s2 = unify(&r1.apply(&s1), &r2.apply(&s1))?;
 
@@ -113,29 +123,29 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
         (Type::Constant(c1, k1), Type::Constant(c2, k2)) => {
             if k1 != k2 {
                 Err(TypeError::KindMismatch(
-                    Type::Constant(c1.clone(), k1.clone()),
-                    Type::Constant(c2.clone(), k2.clone()),
+                    Type::Constant(Rc::clone(c1), k1.clone()),
+                    Type::Constant(Rc::clone(c2), k2.clone()),
                 ))
             } else if c1 == c2 {
                 Ok(HashMap::new())
             } else {
-                Err(TypeError::ConstructorMismatch(c1.clone(), c2.clone()))
+                Err(TypeError::ConstructorMismatch(Rc::clone(c1), Rc::clone(c2)))
             }
         }
-        (Type::Record(r1), Type::Record(r2)) => {
+        (Type::Record(record1), Type::Record(record2)) => {
             let mut s = Substitution::new();
-            for (var, t1) in r1 {
-                let t2 = r2
+            for (var, value1) in record1 {
+                let value2 = record2
                     .get(var)
                     .ok_or_else(|| TypeError::MissingField(var.clone()))?;
-                s = combine(unify(&t1.apply(&s), &t2.apply(&s))?, s);
+                s = combine(unify(&value1.apply(&s), &value2.apply(&s))?, s);
             }
             Ok(s)
         }
-        (Type::Tuple(ts1), Type::Tuple(ts2)) => {
+        (Type::Tuple(tuple1), Type::Tuple(tuple2)) => {
             let mut s = Substitution::new();
-            for (t1, t2) in ts1.iter().zip(ts2.iter()) {
-                s = combine(unify(&t1.apply(&s), &t2.apply(&s))?, s);
+            for (elem1, elem2) in tuple1.iter().zip(tuple2.iter()) {
+                s = combine(unify(&elem1.apply(&s), &elem2.apply(&s))?, s);
             }
             Ok(s)
         }
@@ -145,26 +155,25 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
 
 #[cfg(test)]
 mod test {
-    use super::super::types::{bool_type, num_type};
-    use super::super::{
+    use expr::types::{bool_type, num_type};
+    use expr::{
         expr::{Expr, Pattern},
-        gen,
         lexer::scan,
         parser::parse,
-        solve,
     };
+    use super::super::generate;
     use super::*;
     use rand::{thread_rng, Rng};
 
     fn infer(s: &str) -> Expr<Type> {
         let e = parse(&scan(s)).unwrap();
-        let st = gen::State::default();
+        let st = generate::State::default();
         let (a, e1) = st.generate(&e).unwrap();
         assert!(a.is_empty());
 
         let (type_vars, constraints) = st.extract();
 
-        e1.apply(&solve(constraints, solve::State::new(type_vars)).unwrap())
+        e1.apply(&solve(&constraints, State::new(type_vars)).unwrap())
     }
 
     // during early stages of testing I noticed some non-determainism arising from solving thanks
@@ -188,7 +197,7 @@ mod test {
                 )),
                 (),
             );
-            let st = gen::State::default();
+            let st = generate::State::default();
             let (a, t) = st.generate(&e).unwrap();
             assert!(a.is_empty());
 
@@ -197,7 +206,7 @@ mod test {
 
             let (type_vars, constraints) = st.extract();
 
-            let new_t = t.apply(&solve(constraints, solve::State::new(type_vars)).unwrap());
+            let new_t = t.apply(&solve(&constraints, State::new(type_vars)).unwrap());
             if let Some(l) = last.as_ref() {
                 assert_eq!(l.get_type(), new_t.get_type());
             }

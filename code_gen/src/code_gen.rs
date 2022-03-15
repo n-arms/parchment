@@ -1,6 +1,6 @@
-use super::expr::Operator;
 use super::lift::{self, locals, Expr, Program};
 use super::wasm::{self, Instruction, Type, Value, Wasm};
+use expr::expr::Operator;
 use im::HashMap;
 
 pub fn emit_program(p: Program) -> Wasm {
@@ -62,6 +62,7 @@ pub fn emit_function(f: lift::FunctionDef) -> wasm::FunctionDef {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 pub fn emit_expr(e: Expr) -> Vec<Instruction> {
     match e {
         Expr::Application(e1, e2) => {
@@ -89,7 +90,7 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
         Expr::Boolean(b) => vec![Instruction::Const(Value::I64(if b { 1 } else { 0 }))],
         Expr::Closure(func, env) => match *env {
             Expr::Record(env) if env.is_empty() => make_function(func),
-            env => make_closure(func, env),
+            non_empty_env => make_closure(func, non_empty_env),
         },
         Expr::All(es) => es.into_iter().flat_map(emit_expr).collect(),
         Expr::Assign(v, e) => {

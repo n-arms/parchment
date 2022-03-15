@@ -1,4 +1,4 @@
-use super::expr::{Expr, Pattern, Statement};
+use super::expr::{Expr, Statement};
 use im::{HashMap, HashSet};
 use std::cell::Cell;
 use std::fmt::Display;
@@ -32,7 +32,7 @@ impl Type {
     pub fn variables(&self) -> HashSet<Var> {
         match self {
             Type::Constant(_, _) => HashSet::new(),
-            Type::Variable(var, _) => HashSet::unit(var.clone()),
+            Type::Variable(var, _) => HashSet::unit(Rc::clone(var)),
             Type::Application(left, right) | Type::Arrow(left, right) => {
                 left.variables().union(right.variables())
             }
@@ -84,7 +84,7 @@ impl Apply for Type {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Type::Constant(_, _) => self.clone(),
-            Type::Variable(var, kind) => {
+            Type::Variable(var, ..) => {
                 if let Some(t) = s.get(var) {
                     t.clone()
                 } else {
@@ -112,13 +112,13 @@ impl Apply for Constraint {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Self::Equality(left, right) => Self::Equality(left.apply(s), right.apply(s)),
-            Self::InstanceOf(sub, m, sup) => Self::InstanceOf(
-                sub.apply(s),
+            Self::InstanceOf(sub_type, m, super_type) => Self::InstanceOf(
+                sub_type.apply(s),
                 m.iter()
-                    .map(|v| Type::Variable(v.clone(), Kind::Star).apply(&s))
+                    .map(|v| Type::Variable(Rc::clone(v), Kind::Star).apply(s))
                     .flat_map(|t| t.variables())
                     .collect(),
-                sup.apply(s),
+                super_type.apply(s),
             ),
         }
     }
@@ -194,10 +194,10 @@ pub struct KindError {
 }
 
 /// this is a 100% unironic function name.
-/// all_star checks if all of the kinds in an iterator are *
+/// `all_star` checks if all of the kinds in an iterator are *
 fn all_star<'a>(i: impl Iterator<Item = &'a Type>) -> Result<(), KindError> {
     for t in i {
-        let k = Kind::check(&t)?;
+        let k = Kind::check(t)?;
         if k != Kind::Star {
             return Err(KindError {
                 got_type: t.clone(),
@@ -210,11 +210,13 @@ fn all_star<'a>(i: impl Iterator<Item = &'a Type>) -> Result<(), KindError> {
 }
 
 impl Kind {
-    /// infer the kind of a type, returning a KindError if the type is invalid
+    /// Infer the kind of a type.
+    ///
+    /// # Errors
+    /// Returns a `KindError` if a kind cannot be infered for the type.
     pub fn check(t: &Type) -> Result<Kind, KindError> {
         match t {
-            Type::Variable(var, kind) => Ok(kind.clone()),
-            Type::Constant(var, kind) => Ok(kind.clone()),
+            Type::Constant(_, kind) | Type::Variable(_, kind) => Ok(kind.clone()),
             Type::Application(left, right) => match Kind::check(left)? {
                 Kind::Star => Err(KindError {
                     got_type: left.as_ref().clone(),
@@ -235,15 +237,15 @@ impl Kind {
                 }
             },
             Type::Tuple(tuple) => {
-                let () = all_star(tuple.iter())?;
+                all_star(tuple.iter())?;
                 Ok(Kind::Star)
             }
             Type::Record(record) => {
-                let () = all_star(record.values())?;
+                all_star(record.values())?;
                 Ok(Kind::Star)
             }
             Type::Arrow(left, right) => {
-                let () = all_star(vec![left.as_ref(), right.as_ref()].into_iter())?;
+                all_star(vec![left.as_ref(), right.as_ref()].into_iter())?;
                 Ok(Kind::Star)
             }
         }
