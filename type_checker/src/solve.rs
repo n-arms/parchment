@@ -155,14 +155,14 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
 
 #[cfg(test)]
 mod test {
+    use super::super::generate;
+    use super::*;
     use expr::types::{bool_type, num_type};
     use expr::{
         expr::{Expr, Pattern},
         lexer::scan,
         parser::parse,
     };
-    use super::super::generate;
-    use super::*;
     use rand::{thread_rng, Rng};
 
     fn infer(s: &str) -> Expr<Type> {
@@ -171,7 +171,7 @@ mod test {
         let (a, e1) = st.generate(&e).unwrap();
         assert!(a.is_empty());
 
-        let (type_vars, constraints) = st.extract();
+        let (type_vars, constraints, _) = st.extract();
 
         e1.apply(&solve(&constraints, State::new(type_vars)).unwrap())
     }
@@ -204,7 +204,7 @@ mod test {
             println!("base type {}", t.get_type());
             println!("{}", t);
 
-            let (type_vars, constraints) = st.extract();
+            let (type_vars, constraints, _) = st.extract();
 
             let new_t = t.apply(&solve(&constraints, State::new(type_vars)).unwrap());
             if let Some(l) = last.as_ref() {

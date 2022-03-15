@@ -19,7 +19,8 @@
     clippy::indexing_slicing,
     clippy::missing_panics_doc,
     clippy::string_add,
-    clippy::cast_possible_truncation
+    clippy::cast_possible_truncation,
+    clippy::cast_precision_loss
 )]
 
 pub mod code_gen;

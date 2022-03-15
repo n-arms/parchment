@@ -24,8 +24,9 @@ use expr::{
     expr::Expr,
     lexer::scan,
     parser::parse,
-    types::{Apply, Type},
+    types::{Apply, Type, TypeDef},
 };
+use im::HashMap;
 use std::fs::write;
 use std::io::{self, BufRead};
 use std::process::{Command, Output};
@@ -66,7 +67,7 @@ fn parse_ast(lines: &str) -> Option<Expr<()>> {
     }
 }
 
-fn infer_types(ast: &Expr<()>, debug: bool) -> Option<Expr<Type>> {
+fn infer_types(ast: &Expr<()>, debug: bool) -> Option<(Expr<Type>, HashMap<String, TypeDef>)> {
     let st = generate::State::default();
     let (a, ast) = match st.generate(ast) {
         Ok(s) => s,
@@ -88,7 +89,7 @@ fn infer_types(ast: &Expr<()>, debug: bool) -> Option<Expr<Type>> {
         return None;
     }
 
-    let (type_vars, constraints) = st.extract();
+    let (type_vars, constraints, type_defs) = st.extract();
 
     let s = match solve(&constraints, solve::State::new(type_vars)) {
         Ok(cs) => cs,
@@ -108,11 +109,11 @@ fn infer_types(ast: &Expr<()>, debug: bool) -> Option<Expr<Type>> {
 
     let final_expr = ast.apply(&s);
     println!(":: {}", final_expr.get_type());
-    Some(final_expr)
+    Some((final_expr, type_defs))
 }
 
-fn generate_wasm(typed_ast: &Expr<Type>, debug: bool) -> Wasm {
-    let lifted = lift(typed_ast, &[], &mut code_gen::lift::State::default());
+fn generate_wasm(typed_ast: &Expr<Type>, type_defs: HashMap<String, TypeDef>, debug: bool) -> Wasm {
+    let lifted = lift(typed_ast, &[], &code_gen::lift::State::new(type_defs));
 
     if debug {
         println!("{:#?}", lifted);
@@ -185,9 +186,9 @@ fn run_wasm(wasm: &Wasm, result_type: Type) -> Option<String> {
 fn process_text(lines: &str, state: &ReplState) -> Option<()> {
     let ast = parse_ast(lines)?;
 
-    let typed_ast = infer_types(&ast, state.type_debug)?;
+    let (typed_ast, type_defs) = infer_types(&ast, state.type_debug)?;
 
-    let wasm = generate_wasm(&typed_ast, state.lift_debug);
+    let wasm = generate_wasm(&typed_ast, type_defs, state.lift_debug);
 
     if state.eval {
         println!("= {}", run_wasm(&wasm, typed_ast.get_type())?);
@@ -248,12 +249,12 @@ mod test {
         let (a, e1) = state.generate(&untyped).unwrap();
         assert!(a.is_empty());
 
-        let (type_vars, constraints) = state.extract();
+        let (type_vars, constraints, type_defs) = state.extract();
 
         let sub = solve(&constraints, solve::State::new(type_vars)).unwrap();
 
         let typed = e1.apply(&sub);
-        let lifted = lift(&typed, &[], &mut lift::State::default());
+        let lifted = lift(&typed, &[], &lift::State::new(type_defs));
         let wat = emit_program(lifted);
         let mut fmt = WATFormatter::default();
         wat.format(&mut fmt);

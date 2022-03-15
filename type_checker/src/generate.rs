@@ -20,14 +20,18 @@ pub struct State {
     /// the set of global constraints
     constraints: Rc<RefCell<HashSet<Constraint>>>,
     /// the mapping from type names to type definitions
-    type_defs: HashMap<String, TypeDef>,
+    type_defs: Rc<RefCell<HashMap<String, TypeDef>>>,
     /// the mapping from variant names to type names
-    variants: HashMap<String, String>,
+    variants: Rc<RefCell<HashMap<String, String>>>,
 }
 
 impl State {
-    pub fn extract(self) -> (Fresh, HashSet<Constraint>) {
-        (self.fresh_type_vars, self.constraints.take())
+    pub fn extract(self) -> (Fresh, HashSet<Constraint>, HashMap<String, TypeDef>) {
+        (
+            self.fresh_type_vars,
+            self.constraints.take(),
+            self.type_defs.take(),
+        )
     }
 
     pub fn fresh(&self) -> Var {
@@ -58,32 +62,26 @@ impl State {
         State {
             fresh_type_vars: self.fresh_type_vars.clone(),
             constraints: Rc::clone(&self.constraints),
-            type_defs: self.type_defs.clone(),
-            variants: self.variants.clone(),
+            type_defs: Rc::clone(&self.type_defs),
+            variants: Rc::clone(&self.variants),
             monotonic_type_vars: self.monotonic_type_vars.clone().union(tvs),
         }
     }
 
-    pub fn define_type(&self, name: String, type_def: TypeDef) -> Self {
-        State {
-            fresh_type_vars: self.fresh_type_vars.clone(),
-            constraints: Rc::clone(&self.constraints),
-            monotonic_type_vars: self
-                .monotonic_type_vars
-                .clone()
-                .update(Rc::new(name.clone())),
-            variants: type_def
+    pub fn define_type(&self, name: String, type_def: TypeDef) {
+        self.variants.borrow_mut().extend(
+            type_def
                 .variants
                 .iter()
                 .map(|v| (v.constructor.clone(), name.clone()))
-                .collect(),
-            type_defs: self.type_defs.update(name, type_def),
-        }
+                .collect::<HashMap<_, _>>(),
+        );
+        self.type_defs.borrow_mut().insert(name, type_def);
     }
 
     pub fn lookup_variant(&self, constructor: &str) -> Option<Type> {
-        let type_name = self.variants.get(constructor)?;
-        let type_def = self.type_defs.get(type_name)?;
+        let type_name = self.variants.borrow().get(constructor)?.clone();
+        let type_def = self.type_defs.borrow().get(&type_name)?.clone();
         let result_kind = type_def
             .polymorphic_vars
             .iter()
@@ -91,7 +89,7 @@ impl State {
                 Kind::Arrow(Box::new(Kind::Star), Box::new(base))
             });
         let result_type = type_def.polymorphic_vars.iter().fold(
-            Type::Variable(Rc::new(type_name.clone()), result_kind),
+            Type::Constant(Rc::new(type_name), result_kind),
             |total, var| {
                 Type::Application(
                     Rc::new(total),
@@ -315,8 +313,8 @@ impl State {
 
                 Ok((a2, typed_rest))
             }
-            [Statement::TypeDef(alias, type_vars, variants), rest @ ..] => self
-                .define_type(
+            [Statement::TypeDef(alias, type_vars, variants), rest @ ..] => {
+                self.define_type(
                     alias.clone(),
                     TypeDef {
                         polymorphic_vars: type_vars
@@ -325,8 +323,9 @@ impl State {
                             .collect(),
                         variants: variants.clone(),
                     },
-                )
-                .generate_block(rest),
+                );
+                self.generate_block(rest)
+            }
         }
     }
 }

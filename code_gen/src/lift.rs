@@ -1,8 +1,8 @@
 use expr::{
     expr::{Operator, Pattern, Statement},
-    types::Type,
+    types::{Fresh, Type, TypeDef},
 };
-use im::HashSet;
+use im::{HashMap, HashSet};
 
 #[derive(Clone, Debug)]
 pub enum Expr {
@@ -52,28 +52,60 @@ pub struct Program {
     pub main: Expr,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct State {
-    free_vars: usize,
-    free_funs: usize,
+    /// a source of unused variables
+    free_vars: Fresh,
+    /// a source of unused function indeces
+    free_funs: Fresh,
+    /// a mapping from type names to defined types
+    type_defs: HashMap<String, TypeDef>,
 }
 
 impl State {
-    pub fn fresh_var(&mut self) -> String {
-        let var = self.free_vars.to_string();
-        self.free_vars += 1;
-        var
+    pub fn new(type_defs: HashMap<String, TypeDef>) -> Self {
+        println!("making state with type defs {:?}", type_defs);
+        Self {
+            free_vars: Fresh::default(),
+            free_funs: Fresh::default(),
+            type_defs,
+        }
+    }
+    pub fn fresh_var(&self) -> String {
+        self.free_vars.fresh().to_string()
     }
 
-    pub fn fresh_fun(&mut self) -> usize {
-        let fun = self.free_funs;
-        self.free_funs += 1;
-        fun
+    pub fn fresh_fun(&self) -> usize {
+        self.free_funs.fresh()
+    }
+
+    /// Looks up a variant. Returns the types of its arguments and its variant index
+    ///
+    /// # Panics
+    /// `lookup_variant` will panic if it is given either a type name or a variant name that it is
+    /// not aware of. This should not be a problem, as all type and variant names should be
+    /// detected during type inference.
+    #[allow(clippy::expect_used)]
+    pub fn lookup_variant(&self, type_name: &str, variant_name: &str) -> (Vec<Type>, usize) {
+        println!("type name {} and type defs {:?}", type_name, self.type_defs);
+        let TypeDef { variants, .. } = self
+            .type_defs
+            .get(type_name)
+            .expect("user defined types should be known");
+
+        let mut ordered_variants: Vec<_> = variants.iter().cloned().collect();
+        ordered_variants.sort_by_key(|var| var.constructor.clone());
+
+        let idx = ordered_variants
+            .binary_search_by_key(&variant_name, |v| &v.constructor)
+            .expect("variants should be valid");
+
+        (ordered_variants[idx].fields.clone(), idx)
     }
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn lift(e: &expr::expr::Expr<Type>, current_env: &[String], st: &mut State) -> Program {
+pub fn lift(e: &expr::expr::Expr<Type>, current_env: &[String], st: &State) -> Program {
     match e {
         expr::expr::Expr::Function(pattern, body, _) => {
             let (defs, ptr, env) = lift_function(pattern, body, None, current_env, st);
@@ -181,14 +213,75 @@ pub fn lift(e: &expr::expr::Expr<Type>, current_env: &[String], st: &mut State) 
                 main: Expr::Closure(id2, Box::new(Expr::Record(Vec::new()))),
             }
         }
-        expr::expr::Expr::Match(_, _) | expr::expr::Expr::Constructor(..) => todo!(),
+        /*
+        expr::expr::Expr::Constructor(cons, cons_type) => {
+            println!("lifting constructor {:?} with type {:?}", cons, cons_type);
+            let (num_args, index) = st.lookup_variant(variant_type(cons_type), cons);
+
+            let mut defs = Vec::new();
+            let mut head = Expr::Record({
+                let mut elems = vec![Expr::Integer(index as i64)];
+                elems.extend((0..num_args).rev().map(|index| Expr::RecordLookup(Box::new(get_env()), index)));
+                elems
+            });
+
+            for i in 0..num_args {
+                defs.push(FunctionDef {
+                    arg: String::from("variant_arg"),
+                    env: (0..i).map(|_| String::from("variant_arg")).collect(),
+                    locals: HashSet::new(),
+                    body: head
+                });
+
+                let id = st.fresh_fun();
+
+                head = Expr::Closure(id, Box::new(Expr::Record(((num_args - i - 1)..num_args).map(|idx| Expr::RecordLookup(Box::new(get_env()), idx)).collect())));
+            }
+
+            Program {
+                defs,
+                main: head
+            }
+        }
+        */
+        expr::expr::Expr::Constructor(cons, typ) => {
+            let cons_type = variant_type(typ);
+            let (arg_types, index) = st.lookup_variant(cons_type, cons);
+            let args: Vec<_> = (0..arg_types.len())
+                .map(|_| st.fresh_var())
+                .zip(arg_types.into_iter())
+                .collect();
+
+            let mut desugared = expr::expr::Expr::Record({
+                let mut terms = vec![expr::expr::Expr::Number(index as f64)];
+                terms.extend(
+                    args.iter()
+                        .map(|(name, t)| expr::expr::Expr::Variable(name.clone(), t.clone())),
+                );
+                (0..terms.len())
+                    .map(|i| i.to_string())
+                    .zip(terms.into_iter())
+                    .collect()
+            });
+
+            for (arg, arg_type) in args.into_iter().rev() {
+                desugared = expr::expr::Expr::Function(
+                    Pattern::Variable(arg),
+                    Box::new(desugared),
+                    arg_type,
+                );
+            }
+            //let desugared = arg_types.into_iter().rev().rfold(final_type.clone(), |total, t|
+            lift(&desugared, current_env, st)
+        }
+        expr::expr::Expr::Match(..) => todo!(),
     }
 }
 
 fn lift_all<'a>(
     exprs: impl Iterator<Item = &'a expr::expr::Expr<Type>>,
     current_env: &[String],
-    st: &mut State,
+    st: &State,
 ) -> (Vec<FunctionDef>, Vec<Expr>) {
     let mut defs = Vec::new();
     let mut lifted_exprs = Vec::new();
@@ -203,7 +296,7 @@ fn lift_all<'a>(
     (defs, lifted_exprs)
 }
 
-fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &mut State) -> Program {
+fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> Program {
     let mut defs = Vec::new();
     let mut exprs = Vec::new();
     for (i, stmt) in block.iter().enumerate() {
@@ -252,7 +345,7 @@ fn lift_function(
     b: &expr::expr::Expr<Type>,
     recuring_on: Option<&str>,
     current_env: &[String],
-    st: &mut State,
+    st: &State,
 ) -> (Vec<FunctionDef>, usize, Vec<Expr>) {
     let f_id = st.fresh_fun();
     let mut env: Vec<_> = free(b)
@@ -372,5 +465,20 @@ pub fn to_lookup(p: &Pattern, base: Expr) -> Vec<Expr> {
                 to_lookup(elem, Expr::RecordLookup(Box::new(base.clone()), i + 1))
             })
             .collect(),
+    }
+}
+
+/// given the type signature of a variant, return what user define type it belongs to
+///
+/// # Panics
+/// `variant_type` expects the type signature of a variant. If it is given a type signature that is
+/// not either an application, a constant, or a function that produces a valid variant signature,
+/// it will panic.
+fn variant_type(t: &Type) -> &str {
+    match t {
+        Type::Constant(var, _) => var.as_ref(),
+        Type::Application(left, _) => variant_type(left),
+        Type::Arrow(_, right) => variant_type(right),
+        _ => panic!("illegal variant type {}", t),
     }
 }
