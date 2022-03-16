@@ -106,6 +106,98 @@ impl State {
         }))
     }
 
+    /// Return the most specific type that can be infered for the pattern, as well as a mapping
+    /// from variable names to type variables.
+    ///
+    /// # Errors
+    /// Currently `type_pattern` will not return an error, but when support for variants is added,
+    /// it will return an error if it comes across an unknown variant.
+    pub fn type_pattern(
+        &self,
+        refutable: bool,
+        pattern: &Pattern,
+    ) -> Result<(HashMap<String, Var>, Type), TypeError> {
+        match pattern {
+            Pattern::Variable(v) => {
+                let b = self.fresh();
+                Ok((
+                    HashMap::unit(v.clone(), Rc::clone(&b)),
+                    Type::Variable(b, Kind::Star),
+                ))
+            }
+            Pattern::Record(r) => {
+                let mut bindings = HashMap::new();
+                let mut record = HashMap::new();
+                for (var, val) in r {
+                    let (b, t) = self.type_pattern(refutable, val)?;
+                    bindings.extend(b);
+                    record.insert(var.clone(), t);
+                }
+                Ok((bindings, Type::Record(record)))
+            }
+            Pattern::Tuple(ps) => {
+                let mut bindings = HashMap::new();
+                let mut terms = Vec::new();
+                for p in ps {
+                    let (b1, p1) = self.type_pattern(refutable, p)?;
+                    bindings.extend(b1);
+                    terms.push(p1);
+                }
+                Ok((bindings, Type::Tuple(terms)))
+            }
+            Pattern::Construction(constructor, ps) => {
+                let (type_def, variant) = self
+                    .type_defs
+                    .borrow()
+                    .iter()
+                    .find_map(|(_, td)| {
+                        Some((
+                            td.clone(),
+                            td.variants
+                                .iter()
+                                .find(|v| &v.constructor == constructor)?
+                                .clone(),
+                        ))
+                    })
+                    .ok_or_else(|| TypeError::UnknownVariant(constructor.clone()))?;
+
+                if type_def.variants.len() > 1 && !refutable {
+                    return Err(TypeError::RefutablePattern(pattern.clone()));
+                }
+                if variant.fields.len() != ps.len() {
+                    return Err(TypeError::FieldMismatch(variant.clone(), pattern.clone()));
+                }
+
+                let t1 = self
+                    .lookup_variant(&constructor)
+                    .ok_or_else(|| TypeError::UnknownVariant(constructor.clone()))?;
+
+                let beta = self.fresh();
+
+                let (bindings, typed_ps): (Vec<_>, Vec<_>) = ps
+                    .iter()
+                    .map(|p| self.type_pattern(refutable, p))
+                    .collect::<Result<Vec<(HashMap<String, Var>, Type)>, _>>()?
+                    .into_iter()
+                    .unzip();
+
+                let t2 = typed_ps
+                    .into_iter()
+                    .rev()
+                    .rfold(Type::Variable(beta.clone(), Kind::Star), |total, t| {
+                        Type::Arrow(Rc::new(t), Rc::new(total))
+                    });
+
+                self.instance(t1, t2);
+
+                Ok((
+                    bindings.into_iter().flatten().collect(),
+                    Type::Variable(beta, Kind::Star),
+                ))
+            }
+        }
+    }
+
     /// Annotates an untyped expression with types, and generates the constraints on those types.
     ///
     /// # Errors
@@ -114,7 +206,7 @@ impl State {
     pub fn generate(&self, e: &Expr<()>) -> Result<(HashSet<Assumption>, Expr<Type>), TypeError> {
         match e {
             Expr::Function(pattern, body, ()) => {
-                let (bindings, typed_pattern) = pattern.type_pattern(self.type_vars())?;
+                let (bindings, typed_pattern) = self.type_pattern(false, pattern)?;
 
                 let (mut a1, typed_body) = self
                     .add_monotonic_type_vars(
@@ -288,7 +380,7 @@ impl State {
                 Ok((a2, typed_rest))
             }
             [Statement::Let(pattern, body, ()), rest @ ..] => {
-                let (bindings, typed_pattern) = pattern.type_pattern(self.type_vars())?;
+                let (bindings, typed_pattern) = self.type_pattern(false, pattern)?;
                 let (a1, typed_body) = self.generate(body)?;
                 let (mut a2, mut typed_rest) = self.generate_block(rest)?;
 

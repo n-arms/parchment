@@ -1,11 +1,13 @@
-use super::types::{bool_type, num_type, unit_type, Fresh, Kind, Type, TypeError, Var, Variant};
+use super::types::{
+    bool_type, num_type, unit_type, Fresh, Kind, Type, TypeDef, TypeError, Var, Variant,
+};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
 use std::fmt;
 use std::rc::Rc;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Pattern {
     Variable(String),
     Record(HashMap<String, Pattern>),
@@ -400,47 +402,6 @@ impl fmt::Display for Pattern {
 }
 
 impl Pattern {
-    /// Return the most specific type that can be infered for the pattern, as well as a mapping
-    /// from variable names to type variables.
-    ///
-    /// # Errors
-    /// Currently `type_pattern` will not return an error, but when support for variants is added,
-    /// it will return an error if it comes across an unknown variant.
-    pub fn type_pattern(&self, st: &Fresh) -> Result<(HashMap<String, Var>, Type), TypeError> {
-        match self {
-            Pattern::Variable(v) => {
-                let b = Rc::new(st.fresh().to_string());
-                Ok((
-                    HashMap::unit(v.clone(), Rc::clone(&b)),
-                    Type::Variable(b, Kind::Star),
-                ))
-            }
-            Pattern::Record(r) => {
-                let mut bindings = HashMap::new();
-                let mut record = HashMap::new();
-                for (var, val) in r {
-                    let (b, t) = val.type_pattern(st)?;
-                    bindings.extend(b);
-                    record.insert(var.clone(), t);
-                }
-                Ok((bindings, Type::Record(record)))
-            }
-            Pattern::Tuple(ps) => {
-                let mut bindings = HashMap::new();
-                let mut terms = Vec::new();
-                for p in ps {
-                    let (b1, p1) = p.type_pattern(st)?;
-                    bindings.extend(b1);
-                    terms.push(p1);
-                }
-                Ok((bindings, Type::Tuple(terms)))
-            }
-            Pattern::Construction(..) => {
-                todo!()
-            }
-        }
-    }
-
     pub fn bound_vars(&self) -> HashSet<String> {
         match self {
             Pattern::Variable(v) => HashSet::unit(v.clone()),

@@ -1,4 +1,4 @@
-use super::expr::{Expr, Statement};
+use super::expr::{Expr, Pattern, Statement};
 use im::{HashMap, HashSet};
 use std::cell::Cell;
 use std::fmt::Display;
@@ -261,6 +261,8 @@ pub enum TypeError {
     TypeMismatch(Type, Type),
     MissingField(String),
     UnknownVariant(String),
+    RefutablePattern(Pattern),
+    FieldMismatch(Variant, Pattern),
     NoSolvableConstraints,
 }
 
