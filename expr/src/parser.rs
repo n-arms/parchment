@@ -114,7 +114,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             .foldr(|p, e| Expr::Function(p, Box::new(e), ()));
 
         let statement = just(Token::Let)
-            .ignore_then(pattern)
+            .ignore_then(pattern.clone())
             .then_ignore(just(Token::Eqs))
             .then(expr.clone())
             .map(|(p, e)| Statement::Let(p, e, ()))
@@ -163,6 +163,20 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                 Expr::Tuple(terms)
             });
 
+        let match_expr = just(Token::Match)
+            .ignore_then(expr.clone())
+            .then_ignore(just(Token::LBrace))
+            .then(
+                pattern
+                    .clone()
+                    .then_ignore(just(Token::Rarrow))
+                    .then(expr.clone())
+                    .then_ignore(just(Token::Comma))
+                    .repeated()
+            )
+            .then_ignore(just(Token::RBrace))
+            .map(|(expr, arms)| Expr::Match(Box::new(expr), arms, ()));
+
         let atom = parens
             .or(function)
             .or(constant)
@@ -170,6 +184,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
             .or(block)
             .or(if_)
             .or(tuple)
+            .or(match_expr)
             .or(constructor.map(|c| Expr::Constructor(c, ())))
             .or(variable.map(|v| Expr::Variable(v, ())));
 

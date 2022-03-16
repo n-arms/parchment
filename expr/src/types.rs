@@ -161,7 +161,9 @@ impl Apply for Expr<Type> {
             Expr::Block(block) => {
                 Expr::Block(block.iter().map(|statement| statement.apply(s)).collect())
             }
-            Expr::Match(_, _) => todo!(),
+            Expr::Match(matchand, arms, match_type) => {
+                Expr::Match(Box::new(matchand.apply(s)), arms.iter().map(|(pat, expr)| (pat.clone(), expr.apply(s))).collect(), match_type.apply(s))
+            }
         }
     }
 }

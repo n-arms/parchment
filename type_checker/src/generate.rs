@@ -326,7 +326,36 @@ impl State {
                 self.instance(cons_type, beta.clone());
                 Ok((HashSet::new(), Expr::Constructor(constructor.clone(), beta)))
             }
-            Expr::Match(_, _) => todo!(),
+            Expr::Match(matchand, arms, ()) => {
+                let (mut a1, typed_matchand) = self.generate(matchand)?;
+                let mut typed_arms = Vec::new();
+                let beta = self.fresh();
+
+                for (pattern, expr) in arms {
+                    let (bindings, typed_pattern) = self.type_pattern(true, pattern)?;
+                    self.instance(typed_matchand.get_type(), typed_pattern);
+
+                    let (mut a, typed_expr) = self.generate(expr)?;
+
+                    self.equate(Type::Variable(Rc::clone(&beta), Kind::Star), typed_expr.get_type());
+
+                    typed_arms.push((pattern.clone(), typed_expr));
+
+                    for Assumption(var, tv1) in &a {
+                        if let Some(tv2) = bindings.get(var) {
+                            self.instance(
+                                Type::Variable(Rc::clone(tv2), Kind::Star),
+                                Type::Variable(Rc::clone(tv1), Kind::Star)
+                            );
+                        }
+                    }
+
+                    a.retain(|Assumption(var, _)| !bindings.contains_key(var));
+                    a1.extend(a);
+                }
+
+                Ok((a1, Expr::Match(Box::new(typed_matchand), typed_arms, Type::Variable(beta, Kind::Star))))
+            }
         }
     }
 

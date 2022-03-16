@@ -424,7 +424,7 @@ fn free<A>(e: &expr::expr::Expr<A>) -> HashSet<String> {
         expr::expr::Expr::Tuple(es) => es.iter().flat_map(free).collect(),
         expr::expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
         expr::expr::Expr::Block(b) => free_block(b),
-        expr::expr::Expr::Match(_, _) => todo!(),
+        expr::expr::Expr::Match(matchand, arms, _) => free(matchand).union(arms.iter().flat_map(|(pattern, expr)| free(expr).relative_complement(pattern.bound_vars())).collect())
     }
 }
 

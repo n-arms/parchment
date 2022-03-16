@@ -27,7 +27,8 @@ pub enum Expr<A> {
     Variable(String, A),
     Record(HashMap<String, Expr<A>>),
     If(Box<Expr<A>>, Box<Expr<A>>, Box<Expr<A>>),
-    Match(Box<Expr<A>>, Vec<(Pattern, Expr<A>)>),
+    /// a match expression that will return type A
+    Match(Box<Expr<A>>, Vec<(Pattern, Expr<A>)>, A),
     Block(Vec<Statement<A>>),
     Tuple(Vec<Expr<A>>),
     Constructor(String, A),
@@ -49,7 +50,7 @@ impl Expr<Type> {
                     .collect(),
             ),
             Expr::If(_, expr, _) => expr.get_type(),
-            Expr::Match(_, _) => todo!(),
+            Expr::Match(_, _, match_type) => match_type.clone(),
             Expr::Block(block) => block.last().map_or_else(unit_type, Statement::get_type),
             Expr::Tuple(tuple) => Type::Tuple(tuple.iter().map(Expr::get_type).collect()),
             Expr::Operator(_, t) | Expr::Constructor(_, t) | Expr::Variable(_, t) => t.clone(),
@@ -158,8 +159,8 @@ impl<A: cmp::PartialEq> cmp::PartialEq for Expr<A> {
                     false
                 }
             }
-            Expr::Match(m, l) => {
-                if let Expr::Match(m1, l1) = other {
+            Expr::Match(m, l, _) => {
+                if let Expr::Match(m1, l1, _) = other {
                     m == m1 && l == l1
                 } else {
                     false
@@ -274,7 +275,7 @@ fn show_expr(margin: usize, expr: &Expr<Type>) -> String {
             &margin_str,
             show_expr(margin + 1, e2)
         ),
-        Expr::Match(m, l) => format!(
+        Expr::Match(m, l, _) => format!(
             "match {} {{\n{}}}",
             m,
             l.iter().fold(String::new(), |mut acc, (p, e)| {
@@ -346,7 +347,13 @@ impl fmt::Display for Expr<()> {
                 Ok(())
             }
             Expr::Constructor(cons, _) => write!(f, "{}", cons),
-            Expr::Match(_, _) => todo!(),
+            Expr::Match(matchand, arms, _) => {
+                writeln!(f, "match {} {{", matchand)?;
+                for (pattern, expr) in arms {
+                    writeln!(f, "{} -> {},", pattern, expr)?;
+                }
+                write!(f, "}}")
+            }
         }
     }
 }
