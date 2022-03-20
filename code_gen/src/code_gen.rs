@@ -125,12 +125,16 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             is.extend(emit_expr(*l));
             is.extend(if o == Operator::Equals {
                 vec![]
+            } else if o == Operator::And || o == Operator::Or {
+                vec![Instruction::Wrap(Type::I32, Type::I64)]
             } else {
                 vec![Instruction::Reinterpret(Type::F64, Type::I64)]
             });
             is.extend(emit_expr(*r));
             is.extend(if o == Operator::Equals {
                 vec![]
+            } else if o == Operator::And || o == Operator::Or {
+                vec![Instruction::Wrap(Type::I32, Type::I64)]
             } else {
                 vec![Instruction::Reinterpret(Type::F64, Type::I64)]
             });
@@ -138,6 +142,9 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
                 Operator::Plus => Instruction::Add(Type::F64),
                 Operator::Minus => Instruction::Sub(Type::F64),
                 Operator::Times => Instruction::Mul(Type::F64),
+                Operator::And => Instruction::And(Type::I32),
+                Operator::Or => Instruction::Or(Type::I32),
+                Operator::Not => todo!(),
                 Operator::LessThan => Instruction::GreaterThanEqual(Type::F64),
                 Operator::LessThanEqual => Instruction::GreaterThan(Type::F64),
                 Operator::GreaterThan => Instruction::LessThanEqual(Type::F64),
@@ -150,6 +157,8 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
                     || o == Operator::GreaterThan
                     || o == Operator::GreaterThanEqual
                     || o == Operator::Equals
+                    || o == Operator::And
+                    || o == Operator::Or
                 {
                     vec![Instruction::Extend(Type::I64, Type::I32)]
                 } else {
@@ -164,6 +173,7 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
             is.push(Instruction::Drop);
             is
         }
+        Expr::Unreachable => vec![Instruction::Unreachable],
     }
 }
 

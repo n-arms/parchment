@@ -79,6 +79,15 @@ impl State {
         self.type_defs.borrow_mut().insert(name, type_def);
     }
 
+    /// Get the type of the given constructor.
+    ///
+    /// # Example
+    /// ```parchment
+    /// {
+    ///     type box a = Box a;
+    /// }
+    /// ```
+    /// `lookup_variant("Box") = a -> box a`
     pub fn lookup_variant(&self, constructor: &str) -> Option<Type> {
         let type_name = self.variants.borrow().get(constructor)?.clone();
         let type_def = self.type_defs.borrow().get(&type_name)?.clone();
@@ -115,14 +124,14 @@ impl State {
     pub fn type_pattern(
         &self,
         refutable: bool,
-        pattern: &Pattern,
-    ) -> Result<(HashMap<String, Var>, Type), TypeError> {
+        pattern: &Pattern<()>,
+    ) -> Result<(HashMap<String, Var>, Pattern<Type>), TypeError> {
         match pattern {
-            Pattern::Variable(v) => {
+            Pattern::Variable(v, ()) => {
                 let b = self.fresh();
                 Ok((
                     HashMap::unit(v.clone(), Rc::clone(&b)),
-                    Type::Variable(b, Kind::Star),
+                    Pattern::Variable(v.clone(), Type::Variable(b, Kind::Star)),
                 ))
             }
             Pattern::Record(r) => {
@@ -133,7 +142,7 @@ impl State {
                     bindings.extend(b);
                     record.insert(var.clone(), t);
                 }
-                Ok((bindings, Type::Record(record)))
+                Ok((bindings, Pattern::Record(record)))
             }
             Pattern::Tuple(ps) => {
                 let mut bindings = HashMap::new();
@@ -143,9 +152,9 @@ impl State {
                     bindings.extend(b1);
                     terms.push(p1);
                 }
-                Ok((bindings, Type::Tuple(terms)))
+                Ok((bindings, Pattern::Tuple(terms)))
             }
-            Pattern::Construction(constructor, ps) => {
+            Pattern::Construction(constructor, ps, ()) => {
                 let (type_def, variant) = self
                     .type_defs
                     .borrow()
@@ -165,11 +174,11 @@ impl State {
                     return Err(TypeError::RefutablePattern(pattern.clone()));
                 }
                 if variant.fields.len() != ps.len() {
-                    return Err(TypeError::FieldMismatch(variant.clone(), pattern.clone()));
+                    return Err(TypeError::FieldMismatch(variant, pattern.clone()));
                 }
 
                 let t1 = self
-                    .lookup_variant(&constructor)
+                    .lookup_variant(constructor)
                     .ok_or_else(|| TypeError::UnknownVariant(constructor.clone()))?;
 
                 let beta = self.fresh();
@@ -177,22 +186,26 @@ impl State {
                 let (bindings, typed_ps): (Vec<_>, Vec<_>) = ps
                     .iter()
                     .map(|p| self.type_pattern(refutable, p))
-                    .collect::<Result<Vec<(HashMap<String, Var>, Type)>, _>>()?
+                    .collect::<Result<Vec<(HashMap<String, Var>, Pattern<Type>)>, _>>()?
                     .into_iter()
                     .unzip();
 
                 let t2 = typed_ps
-                    .into_iter()
+                    .iter()
                     .rev()
-                    .rfold(Type::Variable(beta.clone(), Kind::Star), |total, t| {
-                        Type::Arrow(Rc::new(t), Rc::new(total))
+                    .rfold(Type::Variable(Rc::clone(&beta), Kind::Star), |total, t| {
+                        Type::Arrow(Rc::new(t.get_type()), Rc::new(total))
                     });
 
                 self.instance(t1, t2);
 
                 Ok((
                     bindings.into_iter().flatten().collect(),
-                    Type::Variable(beta, Kind::Star),
+                    Pattern::Construction(
+                        constructor.clone(),
+                        typed_ps,
+                        Type::Variable(beta, Kind::Star),
+                    ),
                 ))
             }
         }
@@ -225,9 +238,11 @@ impl State {
 
                 a1.retain(|Assumption(var, _)| !bindings.contains_key(var));
 
+                let pattern_type = typed_pattern.get_type();
+
                 Ok((
                     a1,
-                    Expr::Function(pattern.clone(), Box::new(typed_body), typed_pattern),
+                    Expr::Function(typed_pattern, Box::new(typed_body), pattern_type),
                 ))
             }
             Expr::Application(left, right, ()) => {
@@ -333,19 +348,22 @@ impl State {
 
                 for (pattern, expr) in arms {
                     let (bindings, typed_pattern) = self.type_pattern(true, pattern)?;
-                    self.instance(typed_matchand.get_type(), typed_pattern);
+                    self.instance(typed_matchand.get_type(), typed_pattern.get_type());
 
                     let (mut a, typed_expr) = self.generate(expr)?;
 
-                    self.equate(Type::Variable(Rc::clone(&beta), Kind::Star), typed_expr.get_type());
+                    self.equate(
+                        Type::Variable(Rc::clone(&beta), Kind::Star),
+                        typed_expr.get_type(),
+                    );
 
-                    typed_arms.push((pattern.clone(), typed_expr));
+                    typed_arms.push((typed_pattern, typed_expr));
 
                     for Assumption(var, tv1) in &a {
                         if let Some(tv2) = bindings.get(var) {
                             self.instance(
                                 Type::Variable(Rc::clone(tv2), Kind::Star),
-                                Type::Variable(Rc::clone(tv1), Kind::Star)
+                                Type::Variable(Rc::clone(tv1), Kind::Star),
                             );
                         }
                     }
@@ -354,7 +372,14 @@ impl State {
                     a1.extend(a);
                 }
 
-                Ok((a1, Expr::Match(Box::new(typed_matchand), typed_arms, Type::Variable(beta, Kind::Star))))
+                Ok((
+                    a1,
+                    Expr::Match(
+                        Box::new(typed_matchand),
+                        typed_arms,
+                        Type::Variable(beta, Kind::Star),
+                    ),
+                ))
             }
         }
     }
@@ -376,7 +401,7 @@ impl State {
                 a1.extend(a2);
                 Ok((a1, typed_rest))
             }
-            [Statement::Let(Pattern::Variable(var), body, ()), rest @ ..] => {
+            [Statement::Let(Pattern::Variable(var, ()), body, ()), rest @ ..] => {
                 let beta = self.fresh();
                 let (a1, typed_body) = self.generate(body)?;
                 let (mut a2, mut typed_rest) = self.generate_block(rest)?;
@@ -400,7 +425,10 @@ impl State {
                 typed_rest.insert(
                     0,
                     Statement::Let(
-                        Pattern::Variable(var.clone()),
+                        Pattern::Variable(
+                            var.clone(),
+                            Type::Variable(Rc::clone(&beta), Kind::Star),
+                        ),
                         typed_body,
                         Type::Variable(beta, Kind::Star),
                     ),
@@ -413,7 +441,7 @@ impl State {
                 let (a1, typed_body) = self.generate(body)?;
                 let (mut a2, mut typed_rest) = self.generate_block(rest)?;
 
-                self.equate(typed_pattern.clone(), typed_body.get_type());
+                self.equate(typed_pattern.get_type(), typed_body.get_type());
 
                 for Assumption(var, tv1) in &a2 {
                     if let Some(tv2) = bindings.get(var) {
@@ -427,10 +455,9 @@ impl State {
                 a2.retain(|Assumption(var, _)| !bindings.contains_key(var));
                 a2.extend(a1);
 
-                typed_rest.insert(
-                    0,
-                    Statement::Let(pattern.clone(), typed_body, typed_pattern),
-                );
+                let pattern_type = typed_pattern.get_type();
+
+                typed_rest.insert(0, Statement::Let(typed_pattern, typed_body, pattern_type));
 
                 Ok((a2, typed_rest))
             }

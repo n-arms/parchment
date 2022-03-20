@@ -1,6 +1,4 @@
-use super::types::{
-    bool_type, num_type, unit_type, Fresh, Kind, Type, TypeDef, TypeError, Var, Variant,
-};
+use super::types::{bool_type, num_type, unit_type, Type, Var, Variant};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
@@ -8,17 +6,20 @@ use std::fmt;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Pattern {
-    Variable(String),
-    Record(HashMap<String, Pattern>),
-    Tuple(Vec<Pattern>),
-    Construction(String, Vec<Pattern>),
+//#[derive(Clone, Debug)]
+pub enum Pattern<A: std::clone::Clone> {
+    /// the type of the variable
+    Variable(String, A),
+    Record(HashMap<String, Pattern<A>>),
+    Tuple(Vec<Pattern<A>>),
+    /// a construction that matches an expression of type A
+    Construction(String, Vec<Pattern<A>>, A),
 }
 
 #[derive(Clone, Debug)]
-pub enum Expr<A> {
+pub enum Expr<A: std::clone::Clone> {
     /// a function with a domain of type A
-    Function(Pattern, Box<Expr<A>>, A),
+    Function(Pattern<A>, Box<Expr<A>>, A),
     /// an application that will return type A
     Application(Box<Expr<A>>, Box<Expr<A>>, A),
     Number(f64),
@@ -28,7 +29,7 @@ pub enum Expr<A> {
     Record(HashMap<String, Expr<A>>),
     If(Box<Expr<A>>, Box<Expr<A>>, Box<Expr<A>>),
     /// a match expression that will return type A
-    Match(Box<Expr<A>>, Vec<(Pattern, Expr<A>)>, A),
+    Match(Box<Expr<A>>, Vec<(Pattern<A>, Expr<A>)>, A),
     Block(Vec<Statement<A>>),
     Tuple(Vec<Expr<A>>),
     Constructor(String, A),
@@ -63,6 +64,9 @@ pub enum Operator {
     Plus,
     Minus,
     Times,
+    And,
+    Or,
+    Not,
     Equals,
     LessThan,
     LessThanEqual,
@@ -85,14 +89,19 @@ impl Operator {
                 Rc::new(num_type()),
                 Rc::new(Type::Arrow(Rc::new(num_type()), Rc::new(bool_type()))),
             ),
+            Operator::And | Operator::Or => Type::Arrow(
+                Rc::new(bool_type()),
+                Rc::new(Type::Arrow(Rc::new(bool_type()), Rc::new(bool_type()))),
+            ),
+            Operator::Not => Type::Arrow(Rc::new(bool_type()), Rc::new(bool_type())),
         }
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Statement<A> {
+pub enum Statement<A: std::clone::Clone> {
     /// a let statement with a binding of type A
-    Let(Pattern, Expr<A>, A),
+    Let(Pattern<A>, Expr<A>, A),
     Raw(Expr<A>),
     /// the name of the type, the polymorphic type variables, the possible variants
     TypeDef(String, Vec<Var>, HashSet<Variant>),
@@ -107,7 +116,7 @@ impl Statement<Type> {
     }
 }
 
-impl<A: cmp::PartialEq> cmp::PartialEq for Expr<A> {
+impl<A: cmp::PartialEq + std::clone::Clone> cmp::PartialEq for Expr<A> {
     fn eq(&self, other: &Expr<A>) -> bool {
         match self {
             Expr::Operator(o1, t1) => {
@@ -214,7 +223,7 @@ impl fmt::Display for Statement<Type> {
     }
 }
 
-impl<A: cmp::Eq> cmp::Eq for Expr<A> {}
+impl<A: cmp::Eq + std::clone::Clone> cmp::Eq for Expr<A> {}
 
 fn show_tailing_fn(margin: usize, e: &Expr<Type>) -> String {
     match e {
@@ -302,6 +311,9 @@ impl fmt::Display for Operator {
                 Operator::Plus => "+",
                 Operator::Minus => "-",
                 Operator::Times => "*",
+                Operator::And => "&",
+                Operator::Or => "|",
+                Operator::Not => "!",
                 Operator::Equals => "==",
                 Operator::LessThan => "<",
                 Operator::LessThanEqual => "<=",
@@ -397,29 +409,46 @@ impl Expr<()> {
     }
 }
 
-impl fmt::Display for Pattern {
+impl<A: std::clone::Clone + std::fmt::Debug> fmt::Display for Pattern<A> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            Pattern::Variable(v) => write!(f, "{}", v),
+            Pattern::Variable(v, _) => write!(f, "{}", v),
             Pattern::Record(r) => write!(f, "{:?}", r),
             Pattern::Tuple(t) => write!(f, "{:?}", t),
-            Pattern::Construction(c, ps) => write!(f, "{} {:?}", c, ps),
+            Pattern::Construction(c, ps, _) => write!(f, "{} {:?}", c, ps),
         }
     }
 }
 
-impl Pattern {
+impl<A: std::clone::Clone> Pattern<A> {
     pub fn bound_vars(&self) -> HashSet<String> {
         match self {
-            Pattern::Variable(v) => HashSet::unit(v.clone()),
+            Pattern::Variable(v, _) => HashSet::unit(v.clone()),
             Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
-            Pattern::Construction(_, t) | Pattern::Tuple(t) => {
+            Pattern::Construction(_, t, _) | Pattern::Tuple(t) => {
                 t.iter().flat_map(Pattern::bound_vars).collect()
             }
         }
     }
+}
 
+impl Pattern<Type> {
+    pub fn get_type(&self) -> Type {
+        match self {
+            Pattern::Construction(_, _, t) | Pattern::Variable(_, t) => t.clone(),
+            Pattern::Record(record) => Type::Record(
+                record
+                    .iter()
+                    .map(|(var, val)| (var.clone(), val.get_type()))
+                    .collect(),
+            ),
+            Pattern::Tuple(tuple) => Type::Tuple(tuple.iter().map(Pattern::get_type).collect()),
+        }
+    }
+}
+
+impl Pattern<()> {
     fn rand(from_num: fn(usize) -> String) -> Self {
-        Pattern::Variable(from_num(thread_rng().gen()))
+        Pattern::Variable(from_num(thread_rng().gen()), ())
     }
 }

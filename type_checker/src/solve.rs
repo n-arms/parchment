@@ -186,12 +186,12 @@ mod test {
             let v2 = thread_rng().gen::<usize>().to_string();
             let e = Expr::Application(
                 Box::new(Expr::Function(
-                    Pattern::Variable(v1.clone()),
+                    Pattern::Variable(v1.clone(), ()),
                     Box::new(Expr::Variable(v1.clone(), ())),
                     (),
                 )),
                 Box::new(Expr::Function(
-                    Pattern::Variable(v2.clone()),
+                    Pattern::Variable(v2.clone(), ()),
                     Box::new(Expr::Variable(v2.clone(), ())),
                     (),
                 )),

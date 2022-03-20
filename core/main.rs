@@ -340,5 +340,39 @@ mod test {
             "#
             ))
         );
+        assert_eq!(
+            12.,
+            cast_f64(eval(
+                r#"
+                {
+                    type oneortwo = One Num | Two Num Num;
+                    let sum = fn x -> match x {
+                        One n -> n,
+                        Two a b -> a + b,
+                    };
+                    (sum (One 3)) + (sum (Two 4 5));
+                }
+                "#
+            ))
+        );
+        assert_eq!(
+            17.,
+            cast_f64(eval(
+                r#"
+                {
+                    type maybe a = Just a | Nothing;
+                    let flatten = fn outer -> match outer {
+                        Just inner -> inner,
+                        Nothing -> Nothing,
+                    };
+                    let or_zero = fn m -> match m {
+                        Just x -> x,
+                        Nothing -> 0,
+                    };
+                    (or_zero (flatten Nothing)) + (or_zero (flatten (Just Nothing))) + (or_zero (flatten (Just (Just 17))));
+                }
+                "#
+            ))
+        );
     }
 }

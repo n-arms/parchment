@@ -32,6 +32,7 @@ pub enum Expr {
     RecordLookup(Box<Expr>, usize),
     /// call the primative operator b with the two expressions
     BinaryPrimitive(Operator, Box<Expr>, Box<Expr>),
+    Unreachable,
 }
 
 pub fn get_env() -> Expr {
@@ -101,6 +102,83 @@ impl State {
             .expect("variants should be valid");
 
         (ordered_variants[idx].fields.clone(), idx)
+    }
+
+    /// Find the index of a given variant
+    ///
+    /// # Panics
+    /// Will panic if the given variant is unknown
+    pub fn variant_index(&self, constructor: &str) -> usize {
+        let type_def = self
+            .type_defs
+            .values()
+            .find(|td| td.variants.iter().any(|v| v.constructor == constructor))
+            .expect("variants should be valid");
+        let mut ordered_variants: Vec<_> = type_def.variants.iter().cloned().collect();
+        ordered_variants.sort_by_key(|v| v.constructor.clone());
+        ordered_variants
+            .binary_search_by_key(&constructor, |v| &v.constructor)
+            .expect("variants should be valid")
+    }
+
+    /// Convert a typed pattern into a series of equivilant assignment expressions. Also return an
+    /// expression to test if the pattern matches
+    ///
+    /// # Panics
+    /// Will panic if the given pattern has an unknown variant
+    pub fn to_lookup(&self, p: &Pattern<Type>, base: Expr) -> (Vec<Expr>, Expr) {
+        match p {
+            Pattern::Variable(var, _) => (
+                vec![Expr::Assign(var.clone(), Box::new(base))],
+                Expr::Boolean(true),
+            ),
+            Pattern::Record(record) => {
+                let mut fields: Vec<_> = record.iter().collect();
+                fields.sort_by_key(|(name, _)| *name);
+
+                let mut lookups = Vec::new();
+                let mut valid = Expr::Boolean(true);
+
+                for (i, (_, value)) in fields.into_iter().enumerate() {
+                    let (es, e) =
+                        self.to_lookup(value, Expr::RecordLookup(Box::new(base.clone()), i));
+                    lookups.extend(es);
+                    valid = Expr::BinaryPrimitive(Operator::And, Box::new(valid), Box::new(e));
+                }
+
+                (lookups, valid)
+            }
+            Pattern::Tuple(tuple) => {
+                let mut lookups = Vec::new();
+                let mut valid = Expr::Boolean(true);
+
+                for (i, value) in tuple.iter().enumerate() {
+                    let (es, e) =
+                        self.to_lookup(value, Expr::RecordLookup(Box::new(base.clone()), i));
+                    lookups.extend(es);
+                    valid = Expr::BinaryPrimitive(Operator::And, Box::new(valid), Box::new(e));
+                }
+
+                (lookups, valid)
+            }
+            Pattern::Construction(constructor, args, _) => {
+                let mut lookups = Vec::new();
+                let mut valid = Expr::BinaryPrimitive(
+                    Operator::Equals,
+                    Box::new(Expr::Number(self.variant_index(constructor) as f64)),
+                    Box::new(Expr::RecordLookup(Box::new(base.clone()), 0)),
+                );
+
+                for (i, value) in args.iter().enumerate() {
+                    let (es, e) =
+                        self.to_lookup(value, Expr::RecordLookup(Box::new(base.clone()), i + 1));
+                    lookups.extend(es);
+                    valid = Expr::BinaryPrimitive(Operator::And, Box::new(valid), Box::new(e));
+                }
+
+                (lookups, valid)
+            }
+        }
     }
 }
 
@@ -266,15 +344,53 @@ pub fn lift(e: &expr::expr::Expr<Type>, current_env: &[String], st: &State) -> P
 
             for (arg, arg_type) in args.into_iter().rev() {
                 desugared = expr::expr::Expr::Function(
-                    Pattern::Variable(arg),
+                    Pattern::Variable(arg, arg_type.clone()),
                     Box::new(desugared),
                     arg_type,
                 );
             }
-            //let desugared = arg_types.into_iter().rev().rfold(final_type.clone(), |total, t|
+
             lift(&desugared, current_env, st)
         }
-        expr::expr::Expr::Match(..) => todo!(),
+        expr::expr::Expr::Match(matchand, arms, _) => {
+            let Program {
+                main: matchand_prog,
+                mut defs,
+            } = lift(matchand, current_env, st);
+
+            let matchand_var = st.fresh_var();
+
+            let mut lifted_arms = Vec::new();
+
+            for (pattern, expr) in arms {
+                let prog = lift(expr, current_env, st);
+                defs.extend(prog.defs);
+                let (assignment, matches) =
+                    st.to_lookup(pattern, Expr::Variable(matchand_var.clone()));
+
+                lifted_arms.push((assignment, matches, prog.main));
+            }
+
+            let mut match_arms = Expr::Unreachable;
+
+            for (assign, matches, expr) in lifted_arms.into_iter().rev() {
+                let mut inner = assign;
+                inner.push(expr);
+                match_arms = Expr::If(
+                    Box::new(matches),
+                    Box::new(Expr::All(inner)),
+                    Box::new(match_arms),
+                );
+            }
+
+            Program {
+                defs,
+                main: Expr::All(vec![
+                    Expr::Assign(matchand_var, Box::new(matchand_prog)),
+                    match_arms,
+                ]),
+            }
+        }
     }
 }
 
@@ -303,7 +419,7 @@ fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> 
         match stmt {
             // this is the only form of recursive let statements that we support
             Statement::Let(
-                Pattern::Variable(var),
+                Pattern::Variable(var, _),
                 expr::expr::Expr::Function(pattern, body, _),
                 _,
             ) => {
@@ -316,7 +432,7 @@ fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> 
             }
             Statement::Let(pattern, body, _) => {
                 let temp = st.fresh_var();
-                let lookup = to_lookup(pattern, Expr::Variable(temp.clone()));
+                let (lookup, _) = st.to_lookup(pattern, Expr::Variable(temp.clone()));
                 let Program { main, defs: d } = lift(body, current_env, st);
                 exprs.push(Expr::Assign(temp, Box::new(main)));
                 exprs.extend(lookup);
@@ -341,7 +457,7 @@ fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> 
 }
 
 fn lift_function(
-    p: &Pattern,
+    p: &Pattern<Type>,
     b: &expr::expr::Expr<Type>,
     recuring_on: Option<&str>,
     current_env: &[String],
@@ -356,12 +472,12 @@ fn lift_function(
 
     let mut body = lift(b, &env, st);
 
-    let (mut lookup, arg) = if let Pattern::Variable(var) = p {
+    let (mut lookup, arg) = if let Pattern::Variable(var, _) = p {
         (vec![], var.clone())
     } else {
         let arg = st.fresh_var();
 
-        (to_lookup(p, Expr::Variable(arg.clone())), arg)
+        (st.to_lookup(p, Expr::Variable(arg.clone())).0, arg)
     };
     lookup.push(body.main);
 
@@ -398,6 +514,7 @@ pub fn locals(e: &Expr) -> HashSet<String> {
         | Expr::Number(_)
         | Expr::Boolean(_)
         | Expr::Integer(_)
+        | Expr::Unreachable
         | Expr::RecordLookup(_, _) => HashSet::new(),
         Expr::Application(e1, e2) | Expr::BinaryPrimitive(_, e1, e2) => {
             locals(e1).union(locals(e2))
@@ -409,7 +526,7 @@ pub fn locals(e: &Expr) -> HashSet<String> {
     }
 }
 
-fn free<A>(e: &expr::expr::Expr<A>) -> HashSet<String> {
+fn free<A: Clone>(e: &expr::expr::Expr<A>) -> HashSet<String> {
     match e {
         expr::expr::Expr::Function(pattern, body, _) => {
             free(body).relative_complement(pattern.bound_vars())
@@ -424,11 +541,15 @@ fn free<A>(e: &expr::expr::Expr<A>) -> HashSet<String> {
         expr::expr::Expr::Tuple(es) => es.iter().flat_map(free).collect(),
         expr::expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
         expr::expr::Expr::Block(b) => free_block(b),
-        expr::expr::Expr::Match(matchand, arms, _) => free(matchand).union(arms.iter().flat_map(|(pattern, expr)| free(expr).relative_complement(pattern.bound_vars())).collect())
+        expr::expr::Expr::Match(matchand, arms, _) => free(matchand).union(
+            arms.iter()
+                .flat_map(|(pattern, expr)| free(expr).relative_complement(pattern.bound_vars()))
+                .collect(),
+        ),
     }
 }
 
-fn free_block<A>(b: &[Statement<A>]) -> HashSet<String> {
+fn free_block<A: Clone>(b: &[Statement<A>]) -> HashSet<String> {
     match b {
         [Statement::Let(pattern, body, _), rest @ ..] => free(body)
             .union(free_block(rest))
@@ -436,35 +557,6 @@ fn free_block<A>(b: &[Statement<A>]) -> HashSet<String> {
         [Statement::Raw(e), rest @ ..] => free(e).union(free_block(rest)),
         [Statement::TypeDef(..), rest @ ..] => free_block(rest),
         [] => HashSet::new(),
-    }
-}
-
-pub fn to_lookup(p: &Pattern, base: Expr) -> Vec<Expr> {
-    match p {
-        Pattern::Variable(var) => vec![Expr::Assign(var.clone(), Box::new(base))],
-        Pattern::Record(record) => {
-            let mut fields: Vec<_> = record.iter().collect();
-            fields.sort_by_key(|(name, _)| *name);
-            fields
-                .into_iter()
-                .enumerate()
-                .flat_map(|(i, (_, value))| {
-                    to_lookup(value, Expr::RecordLookup(Box::new(base.clone()), i))
-                })
-                .collect()
-        }
-        Pattern::Tuple(tuple) => tuple
-            .iter()
-            .enumerate()
-            .flat_map(|(i, elem)| to_lookup(elem, Expr::RecordLookup(Box::new(base.clone()), i)))
-            .collect(),
-        Pattern::Construction(_, args) => args
-            .iter()
-            .enumerate()
-            .flat_map(|(i, elem)| {
-                to_lookup(elem, Expr::RecordLookup(Box::new(base.clone()), i + 1))
-            })
-            .collect(),
     }
 }
 

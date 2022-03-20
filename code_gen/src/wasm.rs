@@ -101,6 +101,7 @@ pub enum Instruction {
     /// evaluate the second. Both expressions should produce expressions of type t
     If(Vec<Instruction>, Vec<Instruction>, Type),
     Drop,
+    Unreachable,
 }
 
 #[derive(Clone, Debug)]
@@ -261,6 +262,7 @@ impl Instruction {
             Instruction::GreaterThanEqual(t) => w.line(format!("{}.ge", t)),
             Instruction::Equal(t) => w.line(format!("{}.eq", t)),
             Instruction::Drop => w.line(String::from("drop")),
+            Instruction::Unreachable => w.line(String::from("unreachable")),
         }
     }
 }

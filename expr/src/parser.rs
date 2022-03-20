@@ -88,7 +88,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
 
         let pattern = recursive(|pattern| {
             variable
-                .map(Pattern::Variable)
+                .map(|v| Pattern::Variable(v, ()))
                 .or(record(variable, pattern.clone())
                     .map(|v| Pattern::Record(v.into_iter().collect())))
                 .or(just(Token::Lpar)
@@ -104,7 +104,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                     .then_ignore(just(Token::Rpar)))
                 .or(constructor
                     .then(pattern.clone().repeated())
-                    .map(|(c, es)| Pattern::Construction(c, es)))
+                    .map(|(c, es)| Pattern::Construction(c, es, ())))
         });
 
         let function = just(Token::Fn)
@@ -172,10 +172,10 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                     .then_ignore(just(Token::Rarrow))
                     .then(expr.clone())
                     .then_ignore(just(Token::Comma))
-                    .repeated()
+                    .repeated(),
             )
             .then_ignore(just(Token::RBrace))
-            .map(|(expr, arms)| Expr::Match(Box::new(expr), arms, ()));
+            .map(|(matchand, arms)| Expr::Match(Box::new(matchand), arms, ()));
 
         let atom = parens
             .or(function)
