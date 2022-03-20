@@ -6,7 +6,6 @@ use std::fmt;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-//#[derive(Clone, Debug)]
 pub enum Pattern<A: std::clone::Clone> {
     /// the type of the variable
     Variable(String, A),

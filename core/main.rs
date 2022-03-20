@@ -56,7 +56,8 @@ pub struct ReplState {
 }
 
 fn parse_ast(lines: &str) -> Option<Expr<()>> {
-    match parse(&scan(lines)) {
+    let len = lines.chars().count();
+    match parse(scan(lines), len..len + 1) {
         Ok(a) => Some(a),
         Err(es) => {
             for e in es {

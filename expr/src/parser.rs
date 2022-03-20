@@ -18,14 +18,16 @@ use super::expr::{Expr, Operator, Pattern, Statement};
 use super::token::Token;
 use super::types::{bool_type, num_type, Kind, Type, Variant};
 use chumsky::prelude::*;
+use chumsky::Stream;
 use std::rc::Rc;
+use core::ops::Range;
 
 /// `parse` will use a chumsky parser to turn a token slice into an untyped abstract syntax tree
 /// # Errors
 /// `parse` will only parse valid Parchment expressions. If an invalid token slice is given, it
 /// will return a parse error
-pub fn parse(t: &[Token]) -> Result<Expr<()>, Vec<Simple<Token>>> {
-    parser().parse(t)
+pub fn parse(tokens: Vec<(Token, Range<usize>)>, end: Range<usize>) -> Result<Expr<()>, Vec<Simple<Token>>> {
+    parser().parse(Stream::from_iter(end, tokens.into_iter()))
 }
 
 fn record<L, R>(
@@ -68,7 +70,7 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
         let typ = recursive(|typ| {
             variable
                 .map(|var| Type::Variable(Rc::new(var), Kind::Star))
-                .or(type_constant)
+                .or(type_constant.clone())
                 .or(just(Token::Lpar)
                     .ignore_then(typ.clone())
                     .then(just(Token::Comma).ignore_then(typ.clone()).repeated())
