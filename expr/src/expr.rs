@@ -1,8 +1,10 @@
+use super::kind::Kind;
 use super::types::{bool_type, num_type, unit_type, Type, Var, Variant};
 use im::{HashMap, HashSet};
 use rand::prelude::*;
 use std::cmp;
-use std::fmt;
+use std::fmt::{self, Debug};
+use std::hash::Hash;
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -34,8 +36,8 @@ pub enum Expr<A: std::clone::Clone> {
     Constructor(String, A),
 }
 
-impl Expr<Type> {
-    pub fn get_type(&self) -> Type {
+impl Expr<Type<Kind>> {
+    pub fn get_type(&self) -> Type<Kind> {
         match self {
             Expr::Function(_, body, pattern_type) => {
                 Type::Arrow(Rc::new(pattern_type.clone()), Rc::new(body.get_type()))
@@ -74,7 +76,7 @@ pub enum Operator {
 }
 
 impl Operator {
-    pub fn get_type(&self) -> Type {
+    pub fn get_type(&self) -> Type<Kind> {
         match self {
             Operator::Plus | Operator::Minus | Operator::Times => Type::Arrow(
                 Rc::new(num_type()),
@@ -103,11 +105,11 @@ pub enum Statement<A: std::clone::Clone> {
     Let(Pattern<A>, Expr<A>, A),
     Raw(Expr<A>),
     /// the name of the type, the polymorphic type variables, the possible variants
-    TypeDef(String, Vec<Var>, HashSet<Variant>),
+    TypeDef(String, Vec<Var>, HashSet<Variant<()>>),
 }
 
-impl Statement<Type> {
-    pub fn get_type(&self) -> Type {
+impl Statement<Type<Kind>> {
+    pub fn get_type(&self) -> Type<Kind> {
         match self {
             Statement::TypeDef(..) | Statement::Let(..) => unit_type(),
             Statement::Raw(expr) => expr.get_type(),
@@ -206,25 +208,9 @@ impl<A: cmp::PartialEq + std::clone::Clone> cmp::PartialEq for Expr<A> {
     }
 }
 
-impl fmt::Display for Statement<Type> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Statement::Raw(r) => r.fmt(f),
-            Statement::Let(pattern, body, _) => write!(f, "let {} = {}", pattern, body),
-            Statement::TypeDef(tn, tvs, vs) => {
-                write!(f, "type {} ", tn)?;
-                for var in tvs {
-                    write!(f, "{} ", var)?;
-                }
-                write!(f, "= {:?}", vs)
-            }
-        }
-    }
-}
-
 impl<A: cmp::Eq + std::clone::Clone> cmp::Eq for Expr<A> {}
 
-fn show_tailing_fn(margin: usize, e: &Expr<Type>) -> String {
+fn show_tailing_fn(margin: usize, e: &Expr<Type<Kind>>) -> String {
     match e {
         Expr::Function(pattern, body, _) if matches!(body.as_ref(), Expr::Function(..)) => {
             format!("{} {}", pattern, show_tailing_fn(margin, body))
@@ -239,7 +225,7 @@ fn show_tailing_fn(margin: usize, e: &Expr<Type>) -> String {
     }
 }
 
-fn show_expr(margin: usize, expr: &Expr<Type>) -> String {
+fn show_expr(margin: usize, expr: &Expr<Type<Kind>>) -> String {
     let margin_str: String = vec![' '; margin * 2].iter().collect();
     match expr {
         Expr::Application(l, r, _) => format!(
@@ -369,10 +355,10 @@ impl fmt::Display for Expr<()> {
     }
 }
 
-impl fmt::Display for Statement<()> {
+impl fmt::Display for Statement<Type<Kind>> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Statement::Let(pattern, body, ()) => write!(f, "let {} = {}", pattern, body),
+            Statement::Let(pattern, body, _) => write!(f, "let {} = {}", pattern, body),
             Statement::Raw(expr) => write!(f, "{}", expr),
             Statement::TypeDef(tn, tvs, vs) => {
                 write!(f, "type {} ", tn)?;
@@ -385,7 +371,23 @@ impl fmt::Display for Statement<()> {
     }
 }
 
-impl fmt::Display for Expr<Type> {
+impl fmt::Display for Statement<()> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Statement::Let(pattern, body, _) => write!(f, "let {} = {}", pattern, body),
+            Statement::Raw(expr) => write!(f, "{}", expr),
+            Statement::TypeDef(tn, tvs, vs) => {
+                write!(f, "type {} ", tn)?;
+                for var in tvs {
+                    write!(f, "{} ", var)?;
+                }
+                write!(f, "= {:?}", vs)
+            }
+        }
+    }
+}
+
+impl fmt::Display for Expr<Type<Kind>> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "{}", show_expr(0, self))
     }
@@ -431,8 +433,8 @@ impl<A: std::clone::Clone> Pattern<A> {
     }
 }
 
-impl Pattern<Type> {
-    pub fn get_type(&self) -> Type {
+impl<K: Clone + Debug + PartialEq + Eq + PartialOrd + Ord + Hash> Pattern<Type<K>> {
+    pub fn get_type(&self) -> Type<K> {
         match self {
             Pattern::Construction(_, _, t) | Pattern::Variable(_, t) => t.clone(),
             Pattern::Record(record) => Type::Record(

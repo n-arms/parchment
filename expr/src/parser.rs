@@ -15,18 +15,22 @@ macro_rules! make_bin {
 }
 
 use super::expr::{Expr, Operator, Pattern, Statement};
+use super::kind::Kind;
 use super::token::Token;
-use super::types::{bool_type, num_type, Kind, Type, Variant};
+use super::types::{bool_type, num_type, Type, Variant};
 use chumsky::prelude::*;
 use chumsky::Stream;
-use std::rc::Rc;
 use core::ops::Range;
+use std::rc::Rc;
 
 /// `parse` will use a chumsky parser to turn a token slice into an untyped abstract syntax tree
 /// # Errors
 /// `parse` will only parse valid Parchment expressions. If an invalid token slice is given, it
 /// will return a parse error
-pub fn parse(tokens: Vec<(Token, Range<usize>)>, end: Range<usize>) -> Result<Expr<()>, Vec<Simple<Token>>> {
+pub fn parse(
+    tokens: Vec<(Token, Range<usize>)>,
+    end: Range<usize>,
+) -> Result<Expr<()>, Vec<Simple<Token>>> {
     parser().parse(Stream::from_iter(end, tokens.into_iter()))
 }
 
@@ -63,13 +67,13 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
         );
 
         let type_constant = select!(
-            Token::Constructor(c) if &c == "Num" => num_type(),
-            Token::Constructor(c) if &c == "Bool" => bool_type()
+            Token::Constructor(c) if &c == "Num" => Type::Constant(Rc::new(String::from("Num")), ()),
+            Token::Constructor(c) if &c == "Bool" => Type::Constant(Rc::new(String::from("Bool")), ())        
         );
 
         let typ = recursive(|typ| {
             variable
-                .map(|var| Type::Variable(Rc::new(var), Kind::Star))
+                .map(|var| Type::Variable(Rc::new(var), ()))
                 .or(type_constant.clone())
                 .or(just(Token::Lpar)
                     .ignore_then(typ.clone())

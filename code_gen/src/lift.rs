@@ -1,5 +1,6 @@
 use expr::{
     expr::{Operator, Pattern, Statement},
+    kind::Kind,
     types::{Fresh, Type, TypeDef},
 };
 use im::{HashMap, HashSet};
@@ -60,11 +61,11 @@ pub struct State {
     /// a source of unused function indeces
     free_funs: Fresh,
     /// a mapping from type names to defined types
-    type_defs: HashMap<String, TypeDef>,
+    type_defs: HashMap<String, TypeDef<Kind>>,
 }
 
 impl State {
-    pub fn new(type_defs: HashMap<String, TypeDef>) -> Self {
+    pub fn new(type_defs: HashMap<String, TypeDef<Kind>>) -> Self {
         println!("making state with type defs {:?}", type_defs);
         Self {
             free_vars: Fresh::default(),
@@ -87,7 +88,7 @@ impl State {
     /// not aware of. This should not be a problem, as all type and variant names should be
     /// detected during type inference.
     #[allow(clippy::expect_used)]
-    pub fn lookup_variant(&self, type_name: &str, variant_name: &str) -> (Vec<Type>, usize) {
+    pub fn lookup_variant(&self, type_name: &str, variant_name: &str) -> (Vec<Type<Kind>>, usize) {
         println!("type name {} and type defs {:?}", type_name, self.type_defs);
         let TypeDef { variants, .. } = self
             .type_defs
@@ -126,7 +127,7 @@ impl State {
     ///
     /// # Panics
     /// Will panic if the given pattern has an unknown variant
-    pub fn to_lookup(&self, p: &Pattern<Type>, base: Expr) -> (Vec<Expr>, Expr) {
+    pub fn to_lookup(&self, p: &Pattern<Type<Kind>>, base: Expr) -> (Vec<Expr>, Expr) {
         match p {
             Pattern::Variable(var, _) => (
                 vec![Expr::Assign(var.clone(), Box::new(base))],
@@ -183,7 +184,7 @@ impl State {
 }
 
 #[allow(clippy::too_many_lines)]
-pub fn lift(e: &expr::expr::Expr<Type>, current_env: &[String], st: &State) -> Program {
+pub fn lift(e: &expr::expr::Expr<Type<Kind>>, current_env: &[String], st: &State) -> Program {
     match e {
         expr::expr::Expr::Function(pattern, body, _) => {
             let (defs, ptr, env) = lift_function(pattern, body, None, current_env, st);
@@ -395,7 +396,7 @@ pub fn lift(e: &expr::expr::Expr<Type>, current_env: &[String], st: &State) -> P
 }
 
 fn lift_all<'a>(
-    exprs: impl Iterator<Item = &'a expr::expr::Expr<Type>>,
+    exprs: impl Iterator<Item = &'a expr::expr::Expr<Type<Kind>>>,
     current_env: &[String],
     st: &State,
 ) -> (Vec<FunctionDef>, Vec<Expr>) {
@@ -412,7 +413,7 @@ fn lift_all<'a>(
     (defs, lifted_exprs)
 }
 
-fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> Program {
+fn lift_block(block: &[Statement<Type<Kind>>], current_env: &[String], st: &State) -> Program {
     let mut defs = Vec::new();
     let mut exprs = Vec::new();
     for (i, stmt) in block.iter().enumerate() {
@@ -423,7 +424,7 @@ fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> 
                 expr::expr::Expr::Function(pattern, body, _),
                 _,
             ) => {
-                let (ds, ptr, env) = lift_function(pattern, body, Some(var), current_env, st);
+                let (ds, ptr, env) = lift_function(pattern, body, Some(&var), current_env, st);
                 exprs.push(Expr::Assign(
                     var.clone(),
                     Box::new(Expr::Closure(ptr, Box::new(Expr::Record(env)))),
@@ -457,8 +458,8 @@ fn lift_block(block: &[Statement<Type>], current_env: &[String], st: &State) -> 
 }
 
 fn lift_function(
-    p: &Pattern<Type>,
-    b: &expr::expr::Expr<Type>,
+    p: &Pattern<Type<Kind>>,
+    b: &expr::expr::Expr<Type<Kind>>,
     recuring_on: Option<&str>,
     current_env: &[String],
     st: &State,
@@ -566,10 +567,10 @@ fn free_block<A: Clone>(b: &[Statement<A>]) -> HashSet<String> {
 /// `variant_type` expects the type signature of a variant. If it is given a type signature that is
 /// not either an application, a constant, or a function that produces a valid variant signature,
 /// it will panic.
-fn variant_type(t: &Type) -> &str {
+fn variant_type(t: &Type<Kind>) -> &str {
     match t {
         Type::Constant(var, _) => var.as_ref(),
-        Type::Application(left, _) => variant_type(left),
+        Type::Application(left, _, _) => variant_type(left),
         Type::Arrow(_, right) => variant_type(right),
         _ => panic!("illegal variant type {}", t),
     }

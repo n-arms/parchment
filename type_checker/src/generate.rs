@@ -1,6 +1,7 @@
 use expr::{
     expr::{Expr, Pattern, Statement},
-    types::{bool_type, Constraint, Fresh, Kind, Type, TypeDef, TypeError, Var},
+    kind::Kind,
+    types::{bool_type, Constraint, Fresh, Type, TypeDef, TypeError, Var, Variant},
 };
 use im::{HashMap, HashSet};
 use std::cell::RefCell;
@@ -20,13 +21,13 @@ pub struct State {
     /// the set of global constraints
     constraints: Rc<RefCell<HashSet<Constraint>>>,
     /// the mapping from type names to type definitions
-    type_defs: Rc<RefCell<HashMap<String, TypeDef>>>,
+    type_defs: Rc<RefCell<HashMap<String, TypeDef<Kind>>>>,
     /// the mapping from variant names to type names
     variants: Rc<RefCell<HashMap<String, String>>>,
 }
 
 impl State {
-    pub fn extract(self) -> (Fresh, HashSet<Constraint>, HashMap<String, TypeDef>) {
+    pub fn extract(self) -> (Fresh, HashSet<Constraint>, HashMap<String, TypeDef<Kind>>) {
         (
             self.fresh_type_vars,
             self.constraints.take(),
@@ -42,11 +43,11 @@ impl State {
         self.constraints.borrow_mut().insert(c);
     }
 
-    pub fn equate(&self, t1: Type, t2: Type) {
+    pub fn equate(&self, t1: Type<Kind>, t2: Type<Kind>) {
         self.constrain(Constraint::Equality(t1, t2));
     }
 
-    pub fn instance(&self, super_type: Type, sub_type: Type) {
+    pub fn instance(&self, super_type: Type<Kind>, sub_type: Type<Kind>) {
         self.constrain(Constraint::InstanceOf(
             sub_type,
             self.monotonic_type_vars.clone(),
@@ -68,7 +69,7 @@ impl State {
         }
     }
 
-    pub fn define_type(&self, name: String, type_def: TypeDef) {
+    pub fn define_type(&self, name: String, type_def: TypeDef<Kind>) {
         self.variants.borrow_mut().extend(
             type_def
                 .variants
@@ -77,6 +78,19 @@ impl State {
                 .collect::<HashMap<_, _>>(),
         );
         self.type_defs.borrow_mut().insert(name, type_def);
+    }
+
+    pub fn constant_kinds(&self) -> HashMap<Rc<String>, Kind> {
+        let mut env = HashMap::new();
+        env.extend([
+            (Rc::new(String::from("Num")), Kind::default()),
+            (Rc::new(String::from("Bool")), Kind::default()),
+            (Rc::new(String::from("Unit")), Kind::default()),
+        ]);
+        for (cons, TypeDef {polymorphic_vars, ..}) in self.type_defs.borrow().iter() {
+            env.insert(Rc::new(cons.clone()), Kind::new(polymorphic_vars.len()));
+        }
+        env
     }
 
     /// Get the type of the given constructor.
@@ -88,24 +102,18 @@ impl State {
     /// }
     /// ```
     /// `lookup_variant("Box") = a -> box a`
-    pub fn lookup_variant(&self, constructor: &str) -> Option<Type> {
+    pub fn lookup_variant(&self, constructor: &str) -> Option<Type<Kind>> {
         let type_name = self.variants.borrow().get(constructor)?.clone();
         let type_def = self.type_defs.borrow().get(&type_name)?.clone();
-        let result_kind = type_def
-            .polymorphic_vars
-            .iter()
-            .rfold(Kind::Star, |base, _| {
-                Kind::Arrow(Box::new(Kind::Star), Box::new(base))
-            });
-        let result_type = type_def.polymorphic_vars.iter().fold(
-            Type::Constant(Rc::new(type_name), result_kind),
-            |total, var| {
-                Type::Application(
-                    Rc::new(total),
-                    Rc::new(Type::Variable(Rc::clone(&var.0), var.1.clone())),
-                )
-            },
-        );
+
+        let mut kind_arity = type_def.polymorphic_vars.len();
+        let result_kind = Kind::new(kind_arity);
+        let mut result_type = Type::Constant(Rc::new(type_name), result_kind);
+
+        for (tv, k) in type_def.polymorphic_vars {
+            kind_arity -= 1;
+            result_type = Type::Application(Rc::new(result_type), Rc::new(Type::Variable(Rc::clone(&tv), k)), Kind::new(kind_arity));
+        }
         let variant = type_def
             .variants
             .iter()
@@ -125,13 +133,13 @@ impl State {
         &self,
         refutable: bool,
         pattern: &Pattern<()>,
-    ) -> Result<(HashMap<String, Var>, Pattern<Type>), TypeError> {
+    ) -> Result<(HashMap<String, Var>, Pattern<Type<Kind>>), TypeError> {
         match pattern {
             Pattern::Variable(v, ()) => {
                 let b = self.fresh();
                 Ok((
                     HashMap::unit(v.clone(), Rc::clone(&b)),
-                    Pattern::Variable(v.clone(), Type::Variable(b, Kind::Star)),
+                    Pattern::Variable(v.clone(), Type::Variable(b, Kind::default())),
                 ))
             }
             Pattern::Record(r) => {
@@ -186,16 +194,14 @@ impl State {
                 let (bindings, typed_ps): (Vec<_>, Vec<_>) = ps
                     .iter()
                     .map(|p| self.type_pattern(refutable, p))
-                    .collect::<Result<Vec<(HashMap<String, Var>, Pattern<Type>)>, _>>()?
+                    .collect::<Result<Vec<(HashMap<String, Var>, Pattern<Type<Kind>>)>, _>>()?
                     .into_iter()
                     .unzip();
 
-                let t2 = typed_ps
-                    .iter()
-                    .rev()
-                    .rfold(Type::Variable(Rc::clone(&beta), Kind::Star), |total, t| {
-                        Type::Arrow(Rc::new(t.get_type()), Rc::new(total))
-                    });
+                let t2 = typed_ps.iter().rev().rfold(
+                    Type::Variable(Rc::clone(&beta), Kind::default()),
+                    |total, t| Type::Arrow(Rc::new(t.get_type()), Rc::new(total)),
+                );
 
                 self.instance(t1, t2);
 
@@ -204,7 +210,7 @@ impl State {
                     Pattern::Construction(
                         constructor.clone(),
                         typed_ps,
-                        Type::Variable(beta, Kind::Star),
+                        Type::Variable(beta, Kind::default()),
                     ),
                 ))
             }
@@ -216,7 +222,10 @@ impl State {
     /// # Errors
     /// `generate` will return an error of it encounters an unknown variant
     #[allow(clippy::too_many_lines)]
-    pub fn generate(&self, e: &Expr<()>) -> Result<(HashSet<Assumption>, Expr<Type>), TypeError> {
+    pub fn generate(
+        &self,
+        e: &Expr<()>,
+    ) -> Result<(HashSet<Assumption>, Expr<Type<Kind>>), TypeError> {
         match e {
             Expr::Function(pattern, body, ()) => {
                 let (bindings, typed_pattern) = self.type_pattern(false, pattern)?;
@@ -230,8 +239,8 @@ impl State {
                 for Assumption(v, tv) in &a1 {
                     if let Some(tv2) = bindings.get(v) {
                         self.equate(
-                            Type::Variable(Rc::clone(tv), Kind::Star),
-                            Type::Variable(Rc::clone(tv2), Kind::Star),
+                            Type::Variable(Rc::clone(&tv), Kind::default()),
+                            Type::Variable(Rc::clone(&tv2), Kind::default()),
                         );
                     }
                 }
@@ -256,7 +265,7 @@ impl State {
                     typed_left.get_type(),
                     Type::Arrow(
                         Rc::new(typed_right.get_type()),
-                        Rc::new(Type::Variable(Rc::clone(&beta), Kind::Star)),
+                        Rc::new(Type::Variable(Rc::clone(&beta), Kind::default())),
                     ),
                 );
                 Ok((
@@ -264,7 +273,7 @@ impl State {
                     Expr::Application(
                         Box::new(typed_left),
                         Box::new(typed_right),
-                        Type::Variable(beta, Kind::Star),
+                        Type::Variable(beta, Kind::default()),
                     ),
                 ))
             }
@@ -279,7 +288,7 @@ impl State {
                 let a = HashSet::unit(Assumption(var.clone(), Rc::clone(&beta)));
                 Ok((
                     a,
-                    Expr::Variable(var.clone(), Type::Variable(beta, Kind::Star)),
+                    Expr::Variable(var.clone(), Type::Variable(beta, Kind::default())),
                 ))
             }
             Expr::Record(record) => {
@@ -337,7 +346,7 @@ impl State {
                 let cons_type = self
                     .lookup_variant(constructor)
                     .ok_or_else(|| TypeError::UnknownVariant(constructor.clone()))?;
-                let beta = Type::Variable(self.fresh(), Kind::Star);
+                let beta = Type::Variable(self.fresh(), Kind::default());
                 self.instance(cons_type, beta.clone());
                 Ok((HashSet::new(), Expr::Constructor(constructor.clone(), beta)))
             }
@@ -353,7 +362,7 @@ impl State {
                     let (mut a, typed_expr) = self.generate(expr)?;
 
                     self.equate(
-                        Type::Variable(Rc::clone(&beta), Kind::Star),
+                        Type::Variable(Rc::clone(&beta), Kind::default()),
                         typed_expr.get_type(),
                     );
 
@@ -362,8 +371,8 @@ impl State {
                     for Assumption(var, tv1) in &a {
                         if let Some(tv2) = bindings.get(var) {
                             self.instance(
-                                Type::Variable(Rc::clone(tv2), Kind::Star),
-                                Type::Variable(Rc::clone(tv1), Kind::Star),
+                                Type::Variable(Rc::clone(&tv2), Kind::default()),
+                                Type::Variable(Rc::clone(&tv1), Kind::default()),
                             );
                         }
                     }
@@ -377,7 +386,7 @@ impl State {
                     Expr::Match(
                         Box::new(typed_matchand),
                         typed_arms,
-                        Type::Variable(beta, Kind::Star),
+                        Type::Variable(beta, Kind::default()),
                     ),
                 ))
             }
@@ -387,7 +396,7 @@ impl State {
     fn generate_block(
         &self,
         statements: &[Statement<()>],
-    ) -> Result<(HashSet<Assumption>, Vec<Statement<Type>>), TypeError> {
+    ) -> Result<(HashSet<Assumption>, Vec<Statement<Type<Kind>>>), TypeError> {
         match statements {
             [] => Ok((HashSet::new(), vec![])),
             [Statement::Raw(expr)] => {
@@ -406,15 +415,15 @@ impl State {
                 let (a1, typed_body) = self.generate(body)?;
                 let (mut a2, mut typed_rest) = self.generate_block(rest)?;
                 self.equate(
-                    Type::Variable(Rc::clone(&beta), Kind::Star),
+                    Type::Variable(Rc::clone(&beta), Kind::default()),
                     typed_body.get_type(),
                 );
 
                 for Assumption(var1, tv) in &a2 {
                     if var1 == var {
                         self.instance(
-                            Type::Variable(Rc::clone(&beta), Kind::Star),
-                            Type::Variable(Rc::clone(tv), Kind::Star),
+                            Type::Variable(Rc::clone(&beta), Kind::default()),
+                            Type::Variable(Rc::clone(&tv), Kind::default()),
                         );
                     }
                 }
@@ -427,10 +436,10 @@ impl State {
                     Statement::Let(
                         Pattern::Variable(
                             var.clone(),
-                            Type::Variable(Rc::clone(&beta), Kind::Star),
+                            Type::Variable(Rc::clone(&beta), Kind::default()),
                         ),
                         typed_body,
-                        Type::Variable(beta, Kind::Star),
+                        Type::Variable(beta, Kind::default()),
                     ),
                 );
 
@@ -446,8 +455,8 @@ impl State {
                 for Assumption(var, tv1) in &a2 {
                     if let Some(tv2) = bindings.get(var) {
                         self.instance(
-                            Type::Variable(Rc::clone(tv2), Kind::Star),
-                            Type::Variable(Rc::clone(tv1), Kind::Star),
+                            Type::Variable(Rc::clone(&tv2), Kind::default()),
+                            Type::Variable(Rc::clone(&tv1), Kind::default()),
                         );
                     }
                 }
@@ -462,14 +471,34 @@ impl State {
                 Ok((a2, typed_rest))
             }
             [Statement::TypeDef(alias, type_vars, variants), rest @ ..] => {
+                let mut kinded_variants = HashSet::new();
+                for Variant {
+                    constructor,
+                    fields,
+                } in variants
+                {
+                    let mut env = HashMap::new();
+                    for tv in type_vars {
+                        env.insert(Rc::clone(tv), Kind::default());
+                    }
+                    env.extend(self.constant_kinds());
+                    let kinded_fields: Vec<Type<Kind>> = fields
+                        .iter()
+                        .map(|t| Kind::annotate(t, &env))
+                        .collect::<Result<_, _>>()?;
+                    kinded_variants.insert(Variant {
+                        constructor: constructor.clone(),
+                        fields: kinded_fields,
+                    });
+                }
                 self.define_type(
                     alias.clone(),
                     TypeDef {
                         polymorphic_vars: type_vars
                             .iter()
-                            .map(|var| (Rc::clone(var), Kind::Star))
+                            .map(|var| (Rc::clone(var), Kind::default()))
                             .collect(),
-                        variants: variants.clone(),
+                        variants: kinded_variants,
                     },
                 );
                 self.generate_block(rest)

@@ -1,39 +1,50 @@
 use super::expr::{Expr, Pattern, Statement};
+use super::kind::{KindError, Kind};
 use im::{HashMap, HashSet};
 use std::cell::Cell;
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
+use std::hash::Hash;
 use std::rc::Rc;
 
 pub type Var = Rc<String>;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Type {
-    Constant(Var, Kind),
-    Variable(Var, Kind),
-    Arrow(Rc<Type>, Rc<Type>),
-    Tuple(Vec<Type>),
-    Record(HashMap<String, Type>),
-    Application(Rc<Type>, Rc<Type>),
+pub enum Type<K: Debug + Clone + PartialEq + Eq + PartialOrd + Ord + Hash> {
+    Constant(Var, K),
+    Variable(Var, K),
+    Arrow(Rc<Type<K>>, Rc<Type<K>>),
+    Tuple(Vec<Type<K>>),
+    Record(HashMap<String, Type<K>>),
+    Application(Rc<Type<K>>, Rc<Type<K>>, K),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Variant {
+pub struct Variant<K: Debug + Clone + PartialEq + Eq + PartialOrd + Ord + Hash> {
     pub constructor: String,
-    pub fields: Vec<Type>,
+    pub fields: Vec<Type<K>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct TypeDef {
-    pub polymorphic_vars: Vec<(Var, Kind)>,
-    pub variants: HashSet<Variant>,
+pub struct TypeDef<K: Debug + Clone + PartialEq + Eq + PartialOrd + Ord + Hash> {
+    pub polymorphic_vars: Vec<(Var, K)>,
+    pub variants: HashSet<Variant<K>>,
 }
 
-impl Type {
+impl Type<Kind> {
+    pub fn get_kind(&self) -> Kind {
+        match self {
+            Type::Application(_, _, k) | Type::Variable(_, k) | Type::Constant(_, k) => k.clone(),
+            Type::Tuple(_) | Type::Record(_) | Type::Arrow(_, _) => Kind::default(),
+        }
+    }
+}
+
+impl<K: Clone + Debug + PartialEq + Eq + PartialOrd + Ord + Hash> Type<K> {
     pub fn variables(&self) -> HashSet<Var> {
         match self {
             Type::Constant(_, _) => HashSet::new(),
             Type::Variable(var, _) => HashSet::unit(Rc::clone(var)),
-            Type::Application(left, right) | Type::Arrow(left, right) => {
+            Type::Application(left, right, _) | Type::Arrow(left, right) => {
                 left.variables().union(right.variables())
             }
             Type::Tuple(tuple) => tuple.iter().flat_map(Type::variables).collect(),
@@ -54,33 +65,33 @@ impl Fresh {
     }
 }
 
-pub fn num_type() -> Type {
-    Type::Constant(Rc::new(String::from("Num")), Kind::Star)
+pub fn num_type() -> Type<Kind> {
+    Type::Constant(Rc::new(String::from("Num")), Kind::default())
 }
 
-pub fn bool_type() -> Type {
-    Type::Constant(Rc::new(String::from("Bool")), Kind::Star)
+pub fn bool_type() -> Type<Kind> {
+    Type::Constant(Rc::new(String::from("Bool")), Kind::default())
 }
 
-pub fn unit_type() -> Type {
-    Type::Constant(Rc::new(String::from("Unit")), Kind::Star)
+pub fn unit_type() -> Type<Kind> {
+    Type::Constant(Rc::new(String::from("Unit")), Kind::default())
 }
 
-pub type Substitution = HashMap<Var, Type>;
+pub type Substitution = HashMap<Var, Type<Kind>>;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Constraint {
     /// t1 == t2
-    Equality(Type, Type),
+    Equality(Type<Kind>, Type<Kind>),
     /// t1 is an instance of t2
-    InstanceOf(Type, HashSet<Var>, Type),
+    InstanceOf(Type<Kind>, HashSet<Var>, Type<Kind>),
 }
 
 pub trait Apply {
     fn apply(&self, s: &Substitution) -> Self;
 }
 
-impl Apply for Type {
+impl Apply for Type<Kind> {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Type::Constant(_, _) => self.clone(),
@@ -101,9 +112,11 @@ impl Apply for Type {
                     .map(|(var, t)| (var.clone(), t.apply(s)))
                     .collect(),
             ),
-            Type::Application(left, right) => {
-                Type::Application(Rc::new(left.apply(s)), Rc::new(right.apply(s)))
-            }
+            Type::Application(left, right, kind) => Type::Application(
+                Rc::new(left.apply(s)),
+                Rc::new(right.apply(s)),
+                kind.clone(),
+            ),
         }
     }
 }
@@ -115,7 +128,7 @@ impl Apply for Constraint {
             Self::InstanceOf(sub_type, m, super_type) => Self::InstanceOf(
                 sub_type.apply(s),
                 m.iter()
-                    .map(|v| Type::Variable(Rc::clone(v), Kind::Star).apply(s))
+                    .map(|v| Type::Variable(Rc::clone(v), Kind::default()).apply(s))
                     .flat_map(|t| t.variables())
                     .collect(),
                 super_type.apply(s),
@@ -124,7 +137,7 @@ impl Apply for Constraint {
     }
 }
 
-impl Apply for Expr<Type> {
+impl Apply for Expr<Type<Kind>> {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Expr::Function(pattern, body, pattern_type) => Expr::Function(
@@ -172,7 +185,7 @@ impl Apply for Expr<Type> {
     }
 }
 
-impl Apply for Statement<Type> {
+impl Apply for Statement<Type<Kind>> {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Statement::Let(pattern, body, pattern_type) => {
@@ -186,98 +199,26 @@ impl Apply for Statement<Type> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Kind {
-    Star,
-    Arrow(Box<Kind>, Box<Kind>),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct KindError {
-    got_type: Type,
-    type_kind: Kind,
-    expected_kind: Kind,
-}
-
-/// this is a 100% unironic function name.
-/// `all_star` checks if all of the kinds in an iterator are *
-fn all_star<'a>(i: impl Iterator<Item = &'a Type>) -> Result<(), KindError> {
-    for t in i {
-        let k = Kind::check(t)?;
-        if k != Kind::Star {
-            return Err(KindError {
-                got_type: t.clone(),
-                type_kind: k,
-                expected_kind: Kind::Star,
-            });
-        }
-    }
-    Ok(())
-}
-
-impl Kind {
-    /// Infer the kind of a type.
-    ///
-    /// # Errors
-    /// Returns a `KindError` if a kind cannot be infered for the type.
-    pub fn check(t: &Type) -> Result<Kind, KindError> {
-        match t {
-            Type::Constant(_, kind) | Type::Variable(_, kind) => Ok(kind.clone()),
-            Type::Application(left, right) => match Kind::check(left)? {
-                Kind::Star => Err(KindError {
-                    got_type: left.as_ref().clone(),
-                    type_kind: Kind::Star,
-                    expected_kind: Kind::Arrow(Box::new(Kind::check(right)?), Box::new(Kind::Star)),
-                }),
-                Kind::Arrow(k1, k2) => {
-                    let k3 = Kind::check(right)?;
-                    if &k3 == k1.as_ref() {
-                        Ok(*k2)
-                    } else {
-                        Err(KindError {
-                            got_type: left.as_ref().clone(),
-                            type_kind: Kind::Arrow(k1, k2),
-                            expected_kind: Kind::Arrow(Box::new(k3), Box::new(Kind::Star)),
-                        })
-                    }
-                }
-            },
-            Type::Tuple(tuple) => {
-                all_star(tuple.iter())?;
-                Ok(Kind::Star)
-            }
-            Type::Record(record) => {
-                all_star(record.values())?;
-                Ok(Kind::Star)
-            }
-            Type::Arrow(left, right) => {
-                all_star(vec![left.as_ref(), right.as_ref()].into_iter())?;
-                Ok(Kind::Star)
-            }
-        }
-    }
-}
-
 //#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
 #[derive(Clone, Debug)]
 pub enum TypeError {
-    InfiniteType(Type, Type),
+    InfiniteType(Type<Kind>, Type<Kind>),
     Kind(KindError),
-    KindMismatch(Type, Type),
+    KindMismatch(Type<Kind>, Type<Kind>),
     ConstructorMismatch(Var, Var),
-    TypeMismatch(Type, Type),
+    TypeMismatch(Type<Kind>, Type<Kind>),
     MissingField(String),
     UnknownVariant(String),
     RefutablePattern(Pattern<()>),
-    FieldMismatch(Variant, Pattern<()>),
+    FieldMismatch(Variant<Kind>, Pattern<()>),
     NoSolvableConstraints,
 }
 
-impl Display for Type {
+impl<K: Debug + Clone + PartialEq + Eq + PartialOrd + Ord + Hash> Display for Type<K> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Type::Constant(s, _) => write!(f, "`{}`", s),
-            Type::Variable(s, _) => s.fmt(f),
+            Type::Variable(s, _) => write!(f, "{}", s),
             Type::Arrow(left, right) => write!(f, "({} -> {})", left, right),
             Type::Tuple(tuple) => {
                 write!(f, "(")?;
@@ -293,7 +234,13 @@ impl Display for Type {
                 }
                 write!(f, "}}")
             }
-            Type::Application(left, right) => write!(f, "({} {})", left, right),
+            Type::Application(left, right, _) => write!(f, "({} {})", left, right),
         }
+    }
+}
+
+impl From<KindError> for TypeError {
+    fn from(k: KindError) -> Self {
+        TypeError::Kind(k)
     }
 }

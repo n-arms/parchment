@@ -215,10 +215,13 @@ pub fn scan(prog: &str) -> Vec<(Token, Range<usize>)> {
                     }
                     let span = start..start + buf.len();
                     start += buf.len();
-                    out.push((Token::Number(
-                        buf.parse()
-                            .expect("constructed `buf` out of only numbers and '.'s"),
-                    ), span));
+                    out.push((
+                        Token::Number(
+                            buf.parse()
+                                .expect("constructed `buf` out of only numbers and '.'s"),
+                        ),
+                        span,
+                    ));
                 } else {
                     panic!("found illegal char")
                 }

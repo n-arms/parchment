@@ -25,6 +25,7 @@ use expr::{
     lexer::scan,
     parser::parse,
     types::{Apply, Type, TypeDef},
+    kind::Kind
 };
 use im::HashMap;
 use std::fs::write;
@@ -68,7 +69,10 @@ fn parse_ast(lines: &str) -> Option<Expr<()>> {
     }
 }
 
-fn infer_types(ast: &Expr<()>, debug: bool) -> Option<(Expr<Type>, HashMap<String, TypeDef>)> {
+fn infer_types(
+    ast: &Expr<()>,
+    debug: bool,
+) -> Option<(Expr<Type<Kind>>, HashMap<String, TypeDef<Kind>>)> {
     let st = generate::State::default();
     let (a, ast) = match st.generate(ast) {
         Ok(s) => s,
@@ -113,7 +117,11 @@ fn infer_types(ast: &Expr<()>, debug: bool) -> Option<(Expr<Type>, HashMap<Strin
     Some((final_expr, type_defs))
 }
 
-fn generate_wasm(typed_ast: &Expr<Type>, type_defs: HashMap<String, TypeDef>, debug: bool) -> Wasm {
+fn generate_wasm(
+    typed_ast: &Expr<Type<Kind>>,
+    type_defs: HashMap<String, TypeDef<Kind>>,
+    debug: bool,
+) -> Wasm {
     let lifted = lift(typed_ast, &[], &code_gen::lift::State::new(type_defs));
 
     if debug {
@@ -123,7 +131,7 @@ fn generate_wasm(typed_ast: &Expr<Type>, type_defs: HashMap<String, TypeDef>, de
     emit_program(lifted)
 }
 
-fn run_wasm(wasm: &Wasm, result_type: Type) -> Option<String> {
+fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
     let mut w = WATFormatter::default();
     wasm.format(&mut w);
 
@@ -245,7 +253,8 @@ mod test {
     use code_gen::lift;
 
     fn eval(text: &str) -> u64 {
-        let untyped = parse(&scan(text)).unwrap();
+        let len = text.chars().count();
+        let untyped = parse(scan(text), len..len + 1).unwrap();
         let state = generate::State::default();
         let (a, e1) = state.generate(&untyped).unwrap();
         assert!(a.is_empty());
@@ -333,7 +342,7 @@ mod test {
             cast_f64(eval(
                 r#"
                 {
-                    type maybe = Just a | Nothing;
+                    type maybe a = Just a | Nothing;
                     Just 5;
                     Just true;
                     0;

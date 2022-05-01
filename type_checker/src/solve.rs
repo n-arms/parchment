@@ -1,4 +1,5 @@
-use expr::types::{Apply, Constraint, Fresh, Kind, Substitution, Type, TypeError, Var};
+use expr::kind::Kind;
+use expr::types::{Apply, Constraint, Fresh, Substitution, Type, TypeError, Var};
 use im::{HashMap, HashSet};
 use std::rc::Rc;
 
@@ -55,7 +56,7 @@ pub fn solve(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitution,
                     .variables()
                     .relative_complement(m)
                     .into_iter()
-                    .map(|var| (var, Type::Variable(type_vars.fresh(), Kind::Star)))
+                    .map(|var| (var, Type::Variable(type_vars.fresh(), Kind::default())))
                     .collect(),
             );
             solve(
@@ -99,22 +100,31 @@ fn active_type_vars(c: &Constraint) -> HashSet<Var> {
     }
 }
 
-fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
+fn unify(t1: &Type<Kind>, t2: &Type<Kind>) -> Result<Substitution, TypeError> {
     match (t1, t2) {
         (Type::Variable(v, k), t) | (t, Type::Variable(v, k)) => {
-            if t == &Type::Variable(Rc::clone(v), k.clone()) {
+            if t == &Type::Variable(Rc::clone(&v), k.clone()) {
                 Ok(HashMap::new())
             } else if t.variables().contains(v) {
                 Err(TypeError::InfiniteType(
                     t.clone(),
-                    Type::Variable(Rc::clone(v), k.clone()),
+                    Type::Variable(Rc::clone(&v), k.clone()),
                 ))
             } else {
-                Ok(HashMap::unit(Rc::clone(v), t.clone()))
+                Ok(HashMap::unit(Rc::clone(&v), t.clone()))
             }
         }
-        (Type::Application(l1, r1), Type::Application(l2, r2))
-        | (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
+        (Type::Application(l1, r1, k1), Type::Application(l2, r2, k2)) => {
+            if k1 != k2 {
+                Err(TypeError::KindMismatch(t1.clone(), t2.clone()))
+            } else {
+                let s1 = unify(l1, l2)?;
+                let s2 = unify(&r1.apply(&s1), &r2.apply(&s1))?;
+
+                Ok(combine(s2, s1))
+            }
+        }
+        (Type::Arrow(l1, r1), Type::Arrow(l2, r2)) => {
             let s1 = unify(l1, l2)?;
             let s2 = unify(&r1.apply(&s1), &r2.apply(&s1))?;
 
@@ -123,13 +133,16 @@ fn unify(t1: &Type, t2: &Type) -> Result<Substitution, TypeError> {
         (Type::Constant(c1, k1), Type::Constant(c2, k2)) => {
             if k1 != k2 {
                 Err(TypeError::KindMismatch(
-                    Type::Constant(Rc::clone(c1), k1.clone()),
-                    Type::Constant(Rc::clone(c2), k2.clone()),
+                    Type::Constant(Rc::clone(&c1), k1.clone()),
+                    Type::Constant(Rc::clone(&c2), k2.clone()),
                 ))
             } else if c1 == c2 {
                 Ok(HashMap::new())
             } else {
-                Err(TypeError::ConstructorMismatch(Rc::clone(c1), Rc::clone(c2)))
+                Err(TypeError::ConstructorMismatch(
+                    Rc::clone(&c1),
+                    Rc::clone(&c2),
+                ))
             }
         }
         (Type::Record(record1), Type::Record(record2)) => {
