@@ -77,6 +77,12 @@ fn parser() -> impl Parser<Token, Expr<()>, Error = Simple<Token>> {
                 .or(type_constant.clone())
                 .or(just(Token::Lpar)
                     .ignore_then(typ.clone())
+                    .then(typ.clone().repeated())
+                    .then_ignore(just(Token::Rpar))
+                    .foldl(|left, right| Type::Application(Rc::new(left), Rc::new(right), ()))
+                )
+                .or(just(Token::Lpar)
+                    .ignore_then(typ.clone())
                     .then(just(Token::Comma).ignore_then(typ.clone()).repeated())
                     .then_ignore(just(Token::Rpar))
                     .map(|(hd, mut tl)| {
