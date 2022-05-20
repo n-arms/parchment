@@ -22,10 +22,11 @@ use code_gen::{
 };
 use expr::{
     expr::Expr,
+    kind::Kind,
     lexer::scan,
     parser::parse,
     types::{Apply, Type, TypeDef},
-    kind::Kind
+    fmt::{Pretty, format}
 };
 use im::HashMap;
 use std::fs::write;
@@ -83,7 +84,12 @@ fn infer_types(
     };
 
     if debug {
-        println!("{}\nbase type\n\t{}", st, ast.get_type());
+        println!(
+            "expression \n{}\n with\n{}\nbase type\n\t{}",
+            format(&ast),
+            st,
+            ast.get_type()
+        );
     }
 
     if !a.is_empty() {

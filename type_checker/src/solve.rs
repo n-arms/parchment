@@ -28,6 +28,40 @@ fn combine(s1: Substitution, s2: Substitution) -> Substitution {
     s3
 }
 
+fn solve_eq(cs: &HashSet<Constraint>) -> Result<(HashSet<Constraint>, Substitution), TypeError> {
+    let mut sub = Substitution::default();
+    let mut remaining_cs = cs.clone();
+
+    for c in cs.iter() {
+        if let Constraint::Equality(left, right) = c {
+            sub = combine(unify(&left.apply(&sub), &right.apply(&sub))?, sub);
+            remaining_cs = remaining_cs.without(&c);
+        }
+    }
+
+    Ok((remaining_cs, sub))
+}
+
+pub fn solve(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitution, TypeError> {
+    let (rest, sub1) = solve_eq(cs)?;
+    let sub_rest: HashSet<_> = rest.into_iter().map(|c| c.apply(&sub1)).collect();
+
+    if sub_rest.len() != cs.len() {
+
+        println!("reduced constraints {{");
+        for c in cs {
+            println!("\t{}", c);
+        }
+        println!("}} to constraints {{");
+        for c in &sub_rest {
+            println!("\t{}", c);
+        }
+        println!("}}");
+    }
+    let sub2 = solve_general(&sub_rest, type_vars)?;
+    Ok(combine(sub2, sub1))
+}
+
 /// Solves a set of constraints, producing a substitution
 ///
 /// # Errors
@@ -35,11 +69,20 @@ fn combine(s1: Substitution, s2: Substitution) -> Substitution {
 /// This includes infinite types, type mismatches, kind mismatches, etc
 ///
 /// runs in O(n^2) time though there is probably an O(n log n) algorithm
-pub fn solve(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitution, TypeError> {
+fn solve_general(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitution, TypeError> {
+    println!("solving constraints");
+
+    for c in cs {
+        println!("\t{}", c);
+    }
+
+
     if cs.is_empty() {
         return Ok(Substitution::default());
     }
     let (solvable, rest) = next_solvable(cs)?;
+
+    println!("solving \n\t{}\n", solvable);
 
     match solvable {
         Constraint::Equality(t1, t2) => {

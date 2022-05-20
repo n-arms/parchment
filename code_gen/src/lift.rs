@@ -66,7 +66,6 @@ pub struct State {
 
 impl State {
     pub fn new(type_defs: HashMap<String, TypeDef<Kind>>) -> Self {
-        println!("making state with type defs {:?}", type_defs);
         Self {
             free_vars: Fresh::default(),
             free_funs: Fresh::default(),
@@ -89,7 +88,6 @@ impl State {
     /// detected during type inference.
     #[allow(clippy::expect_used)]
     pub fn lookup_variant(&self, type_name: &str, variant_name: &str) -> (Vec<Type<Kind>>, usize) {
-        println!("type name {} and type defs {:?}", type_name, self.type_defs);
         let TypeDef { variants, .. } = self
             .type_defs
             .get(type_name)

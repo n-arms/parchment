@@ -1,5 +1,5 @@
 use super::expr::{Expr, Pattern, Statement};
-use super::kind::{KindError, Kind};
+use super::kind::{Kind, KindError};
 use im::{HashMap, HashSet};
 use std::cell::Cell;
 use std::fmt::{Debug, Display};
@@ -199,8 +199,7 @@ impl Apply for Statement<Type<Kind>> {
     }
 }
 
-//#[derive(Clone, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub enum TypeError {
     InfiniteType(Type<Kind>, Type<Kind>),
     Kind(KindError),
@@ -242,5 +241,44 @@ impl<K: Debug + Clone + PartialEq + Eq + PartialOrd + Ord + Hash> Display for Ty
 impl From<KindError> for TypeError {
     fn from(k: KindError) -> Self {
         TypeError::Kind(k)
+    }
+}
+
+impl Debug for TypeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TypeError::InfiniteType(a, b) => {
+                write!(f, "cannot unify {} and {} without infinite types", a, b)
+            }
+            TypeError::Kind(e) => write!(f, "kind error {:?}", e),
+            TypeError::KindMismatch(a, b) => write!(
+                f,
+                "types {} and {} have mismatched kinds {:?} and {:?}",
+                a,
+                b,
+                a.get_kind(),
+                b.get_kind()
+            ),
+            TypeError::ConstructorMismatch(a, b) => {
+                write!(f, "constructors {} and {} are not equal", a, b)
+            }
+            TypeError::TypeMismatch(a, b) => write!(f, "types {} and {} cannot be unified", a, b),
+            TypeError::MissingField(field) => write!(f, "record missing field {}", field),
+            TypeError::UnknownVariant(var) => write!(f, "unknown type variant {}", var),
+            TypeError::RefutablePattern(pat) => write!(f, "pattern {} is refutable", pat),
+            TypeError::FieldMismatch(var, pat) => {
+                write!(f, "field mismatch in pattern {} of variant {:?}", pat, var)
+            }
+            TypeError::NoSolvableConstraints => write!(f, "ran out of solvable constraints"),
+        }
+    }
+}
+
+impl Display for Constraint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Constraint::Equality(t1, t2) => write!(f, "{} = {}", t1, t2),
+            Constraint::InstanceOf(sub, m, sup) => write!(f, "{} < {} [{:?}]", sub, sup, m),
+        }
     }
 }

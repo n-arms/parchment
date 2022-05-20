@@ -70,6 +70,7 @@ impl State {
     }
 
     pub fn define_type(&self, name: String, type_def: TypeDef<Kind>) {
+        println!("defining type {:#?}", type_def);
         self.variants.borrow_mut().extend(
             type_def
                 .variants
@@ -87,7 +88,13 @@ impl State {
             (Rc::new(String::from("Bool")), Kind::default()),
             (Rc::new(String::from("Unit")), Kind::default()),
         ]);
-        for (cons, TypeDef {polymorphic_vars, ..}) in self.type_defs.borrow().iter() {
+        for (
+            cons,
+            TypeDef {
+                polymorphic_vars, ..
+            },
+        ) in self.type_defs.borrow().iter()
+        {
             env.insert(Rc::new(cons.clone()), Kind::new(polymorphic_vars.len()));
         }
         env
@@ -110,9 +117,13 @@ impl State {
         let result_kind = Kind::new(kind_arity);
         let mut result_type = Type::Constant(Rc::new(type_name), result_kind);
 
-        for (tv, k) in type_def.polymorphic_vars {
+        for (tv, k) in type_def.polymorphic_vars.into_iter().rev() {
             kind_arity -= 1;
-            result_type = Type::Application(Rc::new(result_type), Rc::new(Type::Variable(Rc::clone(&tv), k)), Kind::new(kind_arity));
+            result_type = Type::Application(
+                Rc::new(result_type),
+                Rc::new(Type::Variable(Rc::clone(&tv), k)),
+                Kind::new(kind_arity),
+            );
         }
         let variant = type_def
             .variants
@@ -198,7 +209,7 @@ impl State {
                     .into_iter()
                     .unzip();
 
-                let t2 = typed_ps.iter().rev().rfold(
+                let t2 = typed_ps.iter().rfold(
                     Type::Variable(Rc::clone(&beta), Kind::default()),
                     |total, t| Type::Arrow(Rc::new(t.get_type()), Rc::new(total)),
                 );
@@ -472,16 +483,19 @@ impl State {
             }
             [Statement::TypeDef(alias, type_vars, variants), rest @ ..] => {
                 let mut kinded_variants = HashSet::new();
+
+                let mut env = HashMap::new();
+                for tv in type_vars {
+                    env.insert(Rc::clone(tv), Kind::default());
+                }
+                env.extend(self.constant_kinds());
+                env.insert(Rc::new(alias.clone()), Kind::new(type_vars.len()));
+
                 for Variant {
                     constructor,
                     fields,
                 } in variants
                 {
-                    let mut env = HashMap::new();
-                    for tv in type_vars {
-                        env.insert(Rc::clone(tv), Kind::default());
-                    }
-                    env.extend(self.constant_kinds());
                     let kinded_fields: Vec<Type<Kind>> = fields
                         .iter()
                         .map(|t| Kind::annotate(t, &env))
