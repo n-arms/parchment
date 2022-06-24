@@ -1,13 +1,13 @@
 use super::expr::*;
 use super::types::*;
-use std::fmt::{Display, Formatter, Debug};
+use std::fmt::{Debug, Display, Formatter};
 use std::hash::Hash;
 
 #[derive(Default, Debug)]
 pub struct ExprFormatter {
     lines: Vec<(usize, String)>,
     indent: usize,
-    current: String
+    current: String,
 }
 
 pub fn format(obj: &impl Pretty) -> String {
@@ -21,7 +21,11 @@ pub fn format(obj: &impl Pretty) -> String {
 impl Display for ExprFormatter {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for (indent, line) in &self.lines {
-            write!(f, "{}", vec![' '; indent * 2].into_iter().collect::<String>())?;
+            write!(
+                f,
+                "{}",
+                vec![' '; indent * 2].into_iter().collect::<String>()
+            )?;
             writeln!(f, "{}", line)?;
         }
         Ok(())
@@ -259,7 +263,7 @@ where
                 var.as_str().format(f);
                 a.format(f);
                 ")".format(f);
-            },
+            }
             Pattern::Record(_) => todo!(),
             Pattern::Tuple(_) => todo!(),
             Pattern::Construction(cons, pats, a) => {
@@ -271,7 +275,7 @@ where
                 }
                 ")".format(f);
                 a.format(f);
-            },
+            }
         }
     }
 }

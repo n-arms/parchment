@@ -95,6 +95,8 @@ pub enum Instruction {
     Extend(Type, Type),
     /// pop a function pointer of type s off the top of the stack, then call it
     CallIndirect(String),
+    /// call given function ptr
+    Call(usize),
     /// load a constant value onto the stack
     Const(Value),
     /// pop a value off the stack, if it is true evaluate the first expression, if it is false
@@ -236,6 +238,7 @@ impl Instruction {
             Instruction::Wrap(new, old) => w.line(format!("{}.wrap_{}", new, old)),
             Instruction::Extend(new, old) => w.line(format!("{}.extend_{}_u", new, old)),
             Instruction::CallIndirect(t) => w.line(format!("call_indirect (type ${})", t)),
+            Instruction::Call(ptr) => w.line(format!("call {}", ptr)),
             Instruction::If(i1, i2, res) => {
                 w.line(format!("(if (result {})", res));
                 w.inc();

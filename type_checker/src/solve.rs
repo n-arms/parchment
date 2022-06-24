@@ -47,7 +47,6 @@ pub fn solve(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitution,
     let sub_rest: HashSet<_> = rest.into_iter().map(|c| c.apply(&sub1)).collect();
 
     if sub_rest.len() != cs.len() {
-
         println!("reduced constraints {{");
         for c in cs {
             println!("\t{}", c);
@@ -75,7 +74,6 @@ fn solve_general(cs: &HashSet<Constraint>, type_vars: State) -> Result<Substitut
     for c in cs {
         println!("\t{}", c);
     }
-
 
     if cs.is_empty() {
         return Ok(Substitution::default());

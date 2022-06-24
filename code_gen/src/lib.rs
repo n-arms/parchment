@@ -23,6 +23,7 @@
     clippy::cast_precision_loss
 )]
 
+pub mod high_ir;
 pub mod code_gen;
 pub mod lift;
 pub mod wasm;

@@ -10,6 +10,8 @@ pub enum Expr {
     /// evaluate the expression on the left to a closure, then call it with the expression on the
     /// right
     Application(Box<Expr>, Box<Expr>),
+    /// call the function pointer on the left with the result of the expression on the left
+    RawApplication(usize, Box<Expr>),
     /// a variable introduced by a function call or a local variable assignment
     Variable(String),
     Number(f64),
@@ -33,7 +35,12 @@ pub enum Expr {
     RecordLookup(Box<Expr>, usize),
     /// call the primative operator b with the two expressions
     BinaryPrimitive(Operator, Box<Expr>, Box<Expr>),
+    /// will exit the program if reached
     Unreachable,
+    /// increment the reference count associated with the given variable's object
+    ReferenceInc(String),
+    /// decrement the reference count associated with the given variable's object
+    ReferenceDec(String),
 }
 
 pub fn get_env() -> Expr {
@@ -290,37 +297,6 @@ pub fn lift(e: &expr::expr::Expr<Type<Kind>>, current_env: &[String], st: &State
                 main: Expr::Closure(id2, Box::new(Expr::Record(Vec::new()))),
             }
         }
-        /*
-        expr::expr::Expr::Constructor(cons, cons_type) => {
-            println!("lifting constructor {:?} with type {:?}", cons, cons_type);
-            let (num_args, index) = st.lookup_variant(variant_type(cons_type), cons);
-
-            let mut defs = Vec::new();
-            let mut head = Expr::Record({
-                let mut elems = vec![Expr::Integer(index as i64)];
-                elems.extend((0..num_args).rev().map(|index| Expr::RecordLookup(Box::new(get_env()), index)));
-                elems
-            });
-
-            for i in 0..num_args {
-                defs.push(FunctionDef {
-                    arg: String::from("variant_arg"),
-                    env: (0..i).map(|_| String::from("variant_arg")).collect(),
-                    locals: HashSet::new(),
-                    body: head
-                });
-
-                let id = st.fresh_fun();
-
-                head = Expr::Closure(id, Box::new(Expr::Record(((num_args - i - 1)..num_args).map(|idx| Expr::RecordLookup(Box::new(get_env()), idx)).collect())));
-            }
-
-            Program {
-                defs,
-                main: head
-            }
-        }
-        */
         expr::expr::Expr::Constructor(cons, typ) => {
             let cons_type = variant_type(typ);
             let (arg_types, index) = st.lookup_variant(cons_type, cons);
@@ -514,12 +490,14 @@ pub fn locals(e: &Expr) -> HashSet<String> {
         | Expr::Boolean(_)
         | Expr::Integer(_)
         | Expr::Unreachable
+        | Expr::ReferenceInc(_)
+        | Expr::ReferenceDec(_)
         | Expr::RecordLookup(_, _) => HashSet::new(),
         Expr::Application(e1, e2) | Expr::BinaryPrimitive(_, e1, e2) => {
             locals(e1).union(locals(e2))
         }
         Expr::All(es) | Expr::Record(es) => es.iter().flat_map(locals).collect(),
-        Expr::Ignore(e) | Expr::Closure(_, e) => locals(e),
+        Expr::Ignore(e) | Expr::Closure(_, e) | Expr::RawApplication(_, e) => locals(e),
         Expr::Assign(v, e) => locals(e).update(v.clone()),
         Expr::If(e1, e2, e3) => locals(e1).union(locals(e2)).union(locals(e3)),
     }

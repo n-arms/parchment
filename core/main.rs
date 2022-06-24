@@ -22,11 +22,11 @@ use code_gen::{
 };
 use expr::{
     expr::Expr,
+    fmt::{format, Pretty},
     kind::Kind,
     lexer::scan,
     parser::parse,
     types::{Apply, Type, TypeDef},
-    fmt::{Pretty, format}
 };
 use im::HashMap;
 use std::fs::write;
@@ -120,6 +120,11 @@ fn infer_types(
 
     let final_expr = ast.apply(&s);
     println!(":: {}", final_expr.get_type());
+
+    if debug {
+        println!("{}", format(&final_expr));
+    }
+
     Some((final_expr, type_defs))
 }
 
@@ -138,10 +143,12 @@ fn generate_wasm(
 }
 
 fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
+    let target = "temp.wat";
+
     let mut w = WATFormatter::default();
     wasm.format(&mut w);
 
-    if let Err(e) = write("temp.wat", w.to_string()) {
+    if let Err(e) = write(target, w.to_string()) {
         println!("{:?}", e);
         return None;
     }
@@ -149,7 +156,7 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
     let Output {
         status: convert_status,
         ..
-    } = match Command::new("wat2wasm").arg("temp.wat").output() {
+    } = match Command::new("wat2wasm").arg(target).output() {
         Ok(o) => o,
         Err(e) => {
             println!("{:?}", e);
@@ -211,7 +218,7 @@ fn process_text(lines: &str, state: &ReplState) -> Option<()> {
 
     Some(())
 }
-
+/*
 fn main() -> io::Result<()> {
     let stdin = io::stdin();
     let mut lines = stdin.lock().lines().map(Result::unwrap);
@@ -251,6 +258,25 @@ fn main() -> io::Result<()> {
             }
         }
     }
+}
+*/
+
+fn main() {
+    let text = "
+fn x y z -> y z
+    ";
+    let ast = parse_ast(text).unwrap();
+
+    let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
+
+    let lifted = code_gen::high_ir::lift(
+        &typed_ast,
+        HashMap::new(),
+        &code_gen::high_ir::SymbolSupply::default(),
+        &code_gen::high_ir::SymbolSupply::default(),
+    );
+
+    println!("{}", lifted);
 }
 
 #[cfg(test)]

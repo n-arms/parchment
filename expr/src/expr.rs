@@ -210,7 +210,6 @@ impl<A: cmp::PartialEq + std::clone::Clone> cmp::PartialEq for Expr<A> {
 
 impl<A: cmp::Eq + std::clone::Clone> cmp::Eq for Expr<A> {}
 
-/*
 fn show_tailing_fn(margin: usize, e: &Expr<Type<Kind>>) -> String {
     match e {
         Expr::Function(pattern, body, _) if matches!(body.as_ref(), Expr::Function(..)) => {
@@ -393,8 +392,6 @@ impl fmt::Display for Expr<Type<Kind>> {
         write!(f, "{}", show_expr(0, self))
     }
 }
-
-*/
 
 impl Expr<()> {
     #[allow(dead_code)]

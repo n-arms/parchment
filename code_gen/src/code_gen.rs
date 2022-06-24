@@ -65,11 +65,18 @@ pub fn emit_function(f: lift::FunctionDef) -> wasm::FunctionDef {
 #[allow(clippy::too_many_lines)]
 pub fn emit_expr(e: Expr) -> Vec<Instruction> {
     match e {
-        Expr::Application(e1, e2) => {
+        Expr::ReferenceInc(_) | Expr::ReferenceDec(_) => todo!(),
+        Expr::Application(func, arg) => {
             let mut is = Vec::new();
-            is.extend(emit_expr(*e2));
-            is.extend(emit_expr(*e1));
+            is.extend(emit_expr(*arg));
+            is.extend(emit_expr(*func));
             is.extend(call_closure());
+            is
+        }
+        Expr::RawApplication(ptr, arg) => {
+            let mut is = Vec::new();
+            is.extend(emit_expr(*arg));
+            is.push(Instruction::Call(ptr));
             is
         }
         Expr::Variable(v) => {
