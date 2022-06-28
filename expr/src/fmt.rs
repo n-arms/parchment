@@ -111,7 +111,6 @@ where
                 Operator::Times => "*",
                 Operator::And => "and",
                 Operator::Or => "or",
-                Operator::Not => "not",
                 Operator::Equals => "==",
                 Operator::LessThan => "<",
                 Operator::LessThanEqual => "<=",

@@ -263,7 +263,7 @@ fn main() -> io::Result<()> {
 
 fn main() {
     let text = "
-fn x y z -> y z
+    if 5 >= 10 then (fn x -> x) 17 else 42
     ";
     let ast = parse_ast(text).unwrap();
 
@@ -272,11 +272,11 @@ fn x y z -> y z
     let lifted = code_gen::high_ir::lift(
         &typed_ast,
         HashMap::new(),
-        &code_gen::high_ir::SymbolSupply::default(),
-        &code_gen::high_ir::SymbolSupply::default(),
+        &code_gen::high_ir::SymbolSupply::new(),
+        &code_gen::high_ir::SymbolSupply::new(),
     );
 
-    println!("{}", lifted);
+    println!("{:#?}", lifted);
 }
 
 #[cfg(test)]

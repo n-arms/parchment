@@ -67,7 +67,6 @@ pub enum Operator {
     Times,
     And,
     Or,
-    Not,
     Equals,
     LessThan,
     LessThanEqual,
@@ -77,24 +76,58 @@ pub enum Operator {
 
 impl Operator {
     pub fn get_type(&self) -> Type<Kind> {
+        Type::Arrow(
+            Rc::new(self.first_arg_type()),
+            Rc::new(self.half_applied_type())
+        )
+    }
+
+    pub fn half_applied_type(&self) -> Type<Kind> {
+        Type::Arrow(Rc::new(self.second_arg_type()), Rc::new(self.result_type()))
+    }
+
+    pub fn first_arg_type(&self) -> Type<Kind> {
         match self {
-            Operator::Plus | Operator::Minus | Operator::Times => Type::Arrow(
-                Rc::new(num_type()),
-                Rc::new(Type::Arrow(Rc::new(num_type()), Rc::new(num_type()))),
-            ),
-            Operator::Equals
-            | Operator::LessThan
-            | Operator::LessThanEqual
-            | Operator::GreaterThan
-            | Operator::GreaterThanEqual => Type::Arrow(
-                Rc::new(num_type()),
-                Rc::new(Type::Arrow(Rc::new(num_type()), Rc::new(bool_type()))),
-            ),
-            Operator::And | Operator::Or => Type::Arrow(
-                Rc::new(bool_type()),
-                Rc::new(Type::Arrow(Rc::new(bool_type()), Rc::new(bool_type()))),
-            ),
-            Operator::Not => Type::Arrow(Rc::new(bool_type()), Rc::new(bool_type())),
+            Operator::Plus |
+            Operator::Minus |
+            Operator::Times |
+            Operator::Equals |
+            Operator::LessThan |
+            Operator::LessThanEqual |
+            Operator::GreaterThan |
+            Operator::GreaterThanEqual => num_type(),
+            Operator::And |
+            Operator::Or => bool_type()
+        }
+    }
+
+    pub fn second_arg_type(&self) -> Type<Kind> {
+        match self {
+            Operator::Plus |
+            Operator::Minus |
+            Operator::Times |
+            Operator::Equals |
+            Operator::LessThan |
+            Operator::LessThanEqual |
+            Operator::GreaterThan |
+            Operator::GreaterThanEqual => num_type(),
+            Operator::And |
+            Operator::Or => bool_type()
+        }
+    }
+
+    pub fn result_type(&self) -> Type<Kind> {
+        match self {
+            Operator::Plus |
+            Operator::Minus |
+            Operator::Times => num_type(),
+            Operator::Equals |
+            Operator::LessThan |
+            Operator::LessThanEqual |
+            Operator::GreaterThan |
+            Operator::GreaterThanEqual |
+            Operator::And |
+            Operator::Or => bool_type()
         }
     }
 }
@@ -298,7 +331,6 @@ impl fmt::Display for Operator {
                 Operator::Times => "*",
                 Operator::And => "&",
                 Operator::Or => "|",
-                Operator::Not => "!",
                 Operator::Equals => "==",
                 Operator::LessThan => "<",
                 Operator::LessThanEqual => "<=",

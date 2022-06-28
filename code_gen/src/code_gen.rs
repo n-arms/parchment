@@ -151,7 +151,6 @@ pub fn emit_expr(e: Expr) -> Vec<Instruction> {
                 Operator::Times => Instruction::Mul(Type::F64),
                 Operator::And => Instruction::And(Type::I32),
                 Operator::Or => Instruction::Or(Type::I32),
-                Operator::Not => todo!(),
                 Operator::LessThan => Instruction::GreaterThanEqual(Type::F64),
                 Operator::LessThanEqual => Instruction::GreaterThan(Type::F64),
                 Operator::GreaterThan => Instruction::LessThanEqual(Type::F64),

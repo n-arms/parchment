@@ -1,15 +1,34 @@
 use expr::{
     expr::{Operator, Pattern},
     kind::Kind,
-    types::{Fresh, Type, TypeDef},
+    types::{bool_type, num_type, Fresh, Type, TypeDef},
 };
-use im::HashMap;
+use im::{HashMap, HashSet};
 use std::cell::Cell;
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Symbol {
-    value: usize,
+    identifier: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Environment {
+    captures: HashMap<Variable, Symbol>,
+}
+
+#[derive(Clone, Debug)]
+pub enum Literal {
+    Number(f64),
+    Boolean(bool),
+    Closure(Symbol, Environment),
+}
+
+#[derive(Clone, Debug)]
+pub enum Predicate {
+    Raw(Symbol),
+    Tag(Symbol),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -19,33 +38,33 @@ pub enum Variable {
 }
 
 #[derive(Clone, Debug)]
-pub struct Environment {
-    captures: Vec<Variable>,
-}
-
-#[derive(Clone, Debug)]
-pub enum Literal {
-    Number(f64),
-    Boolean(bool),
+pub enum Expr {
     Variable(Variable),
-    Closure(Symbol, Environment),
+    Literal(Literal),
+    Application(Symbol, Symbol),
+    BinaryOperation(Operator, Symbol, Symbol),
+    TaggedTuple(usize, Vec<Symbol>),
+    TupleIndex(Symbol, usize),
+    Switch(Predicate, Vec<Block>),
 }
 
 #[derive(Clone, Debug)]
-pub enum Statement {
-    Assign(Symbol, Literal),
-    CallAssign(Symbol, Literal, Literal),
+pub struct Statement {
+    result: Symbol,
+    result_type: Type<Kind>,
+    expr: Expr,
 }
 
 #[derive(Clone, Debug)]
 pub struct Block {
     statements: Vec<Statement>,
-    result: Literal,
+    result: Symbol,
 }
 
 #[derive(Clone, Debug)]
 pub struct FunctionDef {
     parameter: Symbol,
+    parameter_type: Type<Kind>,
     body: Block,
 }
 
@@ -64,7 +83,7 @@ impl Program {
     }
 
     pub fn with_function(mut self, name: Symbol, function: FunctionDef) -> Program {
-        if let Some(_) = self.functions.insert(name, function.clone()) {
+        if let Some(_) = self.functions.insert(name.clone(), function.clone()) {
             panic!(
                 "internal compiler error: redefinition of function {:?} with name {:?}",
                 function, name
@@ -75,24 +94,56 @@ impl Program {
 }
 
 impl Block {
-    pub fn unit(result: Literal) -> Block {
+    pub fn unit(result: Symbol) -> Block {
         Block {
             result,
             statements: Vec::new(),
         }
     }
+
+    pub fn with_statement(mut self, stmt: Statement) -> Block {
+        self.statements.push(stmt);
+        self
+    }
 }
 
-#[derive(Default)]
 pub struct SymbolSupply {
     lowest: Cell<usize>,
 }
 
 impl SymbolSupply {
     pub fn fresh(&self) -> Symbol {
-        let value = self.lowest.take();
-        self.lowest.set(value + 1);
-        Symbol { value }
+        let identifier = self.lowest.take();
+        self.lowest.set(identifier + 1);
+        Symbol { identifier }
+    }
+
+    pub fn new() -> Self {
+        SymbolSupply {
+            lowest: Cell::new(1),
+        }
+    }
+}
+
+pub fn deconstruct_pattern(
+    pattern: &Pattern<Type<Kind>>, 
+    binding: Variable, 
+    variable_supply: &SymbolSupply
+) -> (HashMap<String, Variable>, Vec<Statement>) {
+    match pattern {
+        Pattern::Variable(var_name, var_type) => {
+            let var = variable_supply.fresh();
+            let bindings = HashMap::unit(var_name.clone(), Variable::Local(var));
+            let stmt = Statement {
+                result: var,
+                result_type: var_type.clone(),
+                expr: Expr::Variable(binding)
+            };
+            (bindings, vec![stmt])
+        },
+        Pattern::Record(_) => todo!(),
+        Pattern::Tuple(_) => todo!(),
+        Pattern::Construction(_, _, _) => todo!(),
     }
 }
 
@@ -103,166 +154,262 @@ pub fn lift(
     function_supply: &SymbolSupply,
 ) -> Program {
     match expr {
-        expr::expr::Expr::Number(num) => Program::new(Block::unit(Literal::Number(*num))),
-        expr::expr::Expr::Variable(var, _) => {
-            let main = if let Some(var) = variables.get(var) {
-                Literal::Variable(*var)
-            } else {
-                panic!("internal compiler error: unknown variable {}", var)
-            };
-            Program::new(Block::unit(main))
+        expr::expr::Expr::Number(number) => {
+            let result = variable_supply.fresh();
+            let block = Block::unit(result).with_statement(Statement {
+                result,
+                result_type: num_type(),
+                expr: Expr::Literal(Literal::Number(*number)),
+            });
+            Program::new(block)
         }
-        expr::expr::Expr::Application(function, parameter, _) => {
-            let function_prog = lift(
-                &function,
-                variables.clone(),
-                variable_supply,
-                function_supply,
-            );
-            let parameter_prog = lift(
-                &parameter,
-                variables.clone(),
-                variable_supply,
-                function_supply,
-            );
+        expr::expr::Expr::Application(func, param, result_type) => {
+            let result = variable_supply.fresh();
 
-            let mut statements = function_prog.main.statements;
-            statements.extend(parameter_prog.main.statements);
+            let func_prog = lift(func, variables.clone(), variable_supply, function_supply);
+            let param_prog = lift(param, variables.clone(), variable_supply, function_supply);
 
-            let result_var = variable_supply.fresh();
+            let mut block = Block::unit(result);
+            let statements = func_prog
+                .main
+                .statements
+                .into_iter()
+                .chain(param_prog.main.statements.into_iter());
 
-            statements.push(Statement::CallAssign(
-                result_var,
-                function_prog.main.result,
-                parameter_prog.main.result,
-            ));
+            for stmt in statements {
+                block = block.with_statement(stmt);
+            }
 
-            let block = Block {
-                result: Literal::Variable(Variable::Local(result_var)),
-                statements,
-            };
+            block = block.with_statement(Statement {
+                result,
+                result_type: result_type.clone(),
+                expr: Expr::Application(func_prog.main.result, param_prog.main.result),
+            });
 
-            let mut application_prog = Program::new(block);
-
-            for (var, func) in function_prog
+            let defs = func_prog
                 .functions
                 .into_iter()
-                .chain(parameter_prog.functions.into_iter())
-            {
-                application_prog = application_prog.with_function(var, func);
+                .chain(param_prog.functions.into_iter());
+
+            let mut prog = Program::new(block);
+
+            for (name, def) in defs {
+                prog = prog.with_function(name, def);
             }
-            application_prog
+
+            prog
         }
-        expr::expr::Expr::Function(Pattern::Variable(var, _), body, _) => {
-            let body_var = variable_supply.fresh();
+        expr::expr::Expr::Variable(var_name, var_type) => {
+            if let Some(var) = variables.get(var_name) {
+                match var {
+                    Variable::Local(symbol) => Program::new(Block::unit(*symbol)),
+                    Variable::Captured(symbol) => {
+                        let result = variable_supply.fresh();
+                        let block = Block::unit(result).with_statement(Statement {
+                            result_type: var_type.clone(),
+                            result,
+                            expr: Expr::Variable(Variable::Captured(*symbol)),
+                        });
+                        Program::new(block)
+                    }
+                }
+            } else {
+                panic!("internal compiler error: unknown variable {}", var_name)
+            }
+        }
+        expr::expr::Expr::Function(param_pat, body, _) => {
+            let body_var_supply = SymbolSupply::new();
+            let param = body_var_supply.fresh();
 
-            let new_vars = variables
+            let (captures, mut body_vars) = free(body)
                 .iter()
-                .map(|(name, var)| (name.clone(), match var {
-                    Variable::Local(var) => Variable::Captured(*var),
-                    Variable::Captured(_) => *var,
-                }))
-                .collect::<HashMap<_, _>>()
-                .update(var.clone(), Variable::Local(body_var));
-
-            let body_prog = lift(
-                &body,
-                new_vars,
-                variable_supply,
-                function_supply,
-            );
-
-            let function = function_supply.fresh();
-
-            let def = FunctionDef {
-                parameter: body_var,
-                body: body_prog.main,
-            };
-
-            let captures = variables.values().copied().collect();
+                .map(|var_name| (var_name, body_var_supply.fresh()))
+                .filter_map(|(var_name, body_sym)| Some(((variables.get(var_name)?.clone(), body_sym), (var_name.clone(), Variable::Captured(body_sym)))))
+                .unzip::<_, _, _, HashMap<String, Variable>>();
 
             let env = Environment { captures };
 
-            let mut closure_prog = Program::new(Block::unit(Literal::Closure(function, env)))
-                .with_function(function, def);
+            let (pattern_locals, header) = deconstruct_pattern(param_pat, Variable::Local(param), &body_var_supply);
+            body_vars.extend(pattern_locals);
 
-            for (var, func) in body_prog.functions {
-                closure_prog = closure_prog.with_function(var, func);
+            let mut body_prog = lift(body, body_vars, &body_var_supply, function_supply);
+
+            let mut statements = header;
+            statements.extend(body_prog.main.statements);
+            body_prog.main.statements = statements;
+
+            let function_symbol = function_supply.fresh();
+            let definition = FunctionDef {
+                body: body_prog.main,
+                parameter: param,
+                parameter_type: param_pat.get_type()
+            };
+
+            let closure_var = variable_supply.fresh();
+            let closure_stmt = Statement {
+                result: closure_var,
+                result_type: Type::Arrow(Rc::new(param_pat.get_type()), Rc::new(body.get_type())),
+                expr: Expr::Literal(Literal::Closure(function_symbol, env))
+            };
+
+            let block = Block::unit(closure_var)
+                .with_statement(closure_stmt);
+
+            let mut prog = Program::new(block).with_function(function_symbol, definition);
+
+            for (name, def) in body_prog.functions {
+                prog = prog.with_function(name, def);
             }
 
-            closure_prog
+            prog
         }
+        expr::expr::Expr::Boolean(boolean) => {
+            let result = variable_supply.fresh();
+            let block = Block::unit(result).with_statement(Statement {
+                result,
+                result_type: bool_type(),
+                expr: Expr::Literal(Literal::Boolean(*boolean)),
+            });
+            Program::new(block)
+        }
+        expr::expr::Expr::If(predicate, consequent, alternative) => {
+            let pred_prog = lift(predicate, variables.clone(), variable_supply, function_supply);
+            let cons_prog = lift(consequent, variables.clone(), variable_supply, function_supply);
+            let altr_prog = lift(alternative, variables, variable_supply, function_supply);
 
-        expr::expr::Expr::Function(_, _, _) => todo!(),
-        expr::expr::Expr::Boolean(_) => todo!(),
-        expr::expr::Expr::Operator(_, _) => todo!(),
-        expr::expr::Expr::Record(_) => todo!(),
-        expr::expr::Expr::If(_, _, _) => todo!(),
-        expr::expr::Expr::Match(_, _, _) => todo!(),
-        expr::expr::Expr::Block(_) => todo!(),
+            let result = variable_supply.fresh();
+            let if_stmt = Statement {
+                result,
+                result_type: consequent.get_type(),
+                expr: Expr::Switch(
+                    Predicate::Raw(pred_prog.main.result),
+                    vec![
+                        altr_prog.main,
+                        cons_prog.main,
+                    ]
+                )
+            };
+
+            let mut block = pred_prog.main.with_statement(if_stmt);
+            block.result = result;
+
+            let mut prog = Program::new(block);
+
+            let funcs = pred_prog.functions.into_iter().chain(cons_prog.functions.into_iter()).chain(altr_prog.functions.into_iter());
+
+            for (name, def) in funcs {
+                prog = prog.with_function(name, def);
+            }
+
+            prog
+        }
+        expr::expr::Expr::Operator(op, _) => {
+            let supply = SymbolSupply::new();
+            let supply = SymbolSupply::new();
+
+            let inner_symbol = function_supply.fresh();
+            let outer_symbol = function_supply.fresh();
+
+            let outer_param = supply.fresh();
+            let captured_param = supply.fresh();
+            let inner_closure = supply.fresh();
+
+            let outer_stmt = Statement {
+                result: inner_closure,
+                result_type: op.half_applied_type(),
+                expr: Expr::Literal(Literal::Closure(
+                    inner_symbol,
+                    Environment {
+                        captures: HashMap::unit(Variable::Local(outer_param), captured_param)
+                    }
+                ))
+            };
+            let outer = Block::unit(inner_closure)
+                .with_statement(outer_stmt);
+
+            let outer_def = FunctionDef {
+                body: outer,
+                parameter: outer_param,
+                parameter_type: op.first_arg_type()
+            };
+
+            let inner_param = supply.fresh();
+            let localized_capture = supply.fresh();
+            let final_result = supply.fresh();
+
+            let localize_stmt = Statement {
+                result: localized_capture,
+                result_type: op.first_arg_type(),
+                expr: Expr::Variable(Variable::Captured(captured_param))
+            };
+
+            let operation_stmt = Statement {
+                result: final_result,
+                result_type: op.second_arg_type(),
+                expr: Expr::BinaryOperation(*op, inner_param, localized_capture)
+            };
+
+            let inner = Block::unit(final_result)
+                .with_statement(localize_stmt)
+                .with_statement(operation_stmt);
+
+            let inner_def = FunctionDef {
+                body: inner,
+                parameter: inner_param,
+                parameter_type: op.second_arg_type()
+            };
+
+            let outer_closure = variable_supply.fresh();
+            let global_stmt = Statement {
+                result: outer_closure,
+                result_type: op.get_type(),
+                expr: Expr::Literal(Literal::Closure(outer_symbol, Environment::default()))
+            };
+            let global = Block::unit(outer_closure)
+                .with_statement(global_stmt);
+
+            Program::new(global)
+                .with_function(outer_symbol, outer_def)
+                .with_function(inner_symbol, inner_def)
+        },
         expr::expr::Expr::Tuple(_) => todo!(),
         expr::expr::Expr::Constructor(_, _) => todo!(),
+        expr::expr::Expr::Record(_) => todo!(),
+        expr::expr::Expr::Match(_, _, _) => todo!(),
+        expr::expr::Expr::Block(_) => todo!(),
     }
 }
 
-impl Display for Block {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{{")?;
-        for statement in &self.statements {
-            match statement {
-                Statement::Assign(var, val) => writeln!(f, "\t{} = {}", var, val)?,
-                Statement::CallAssign(var, func, arg) => writeln!(f, "\t{} = {} {}", var, func, arg)?,
-            }
+fn free<A: Clone>(e: &expr::expr::Expr<A>) -> HashSet<String> {
+    match e {
+        expr::expr::Expr::Function(pattern, body, _) => {
+            free(body).relative_complement(pattern.bound_vars())
         }
-        writeln!(f, "\t{}", self.result)?;
-        write!(f, "}}")
+        expr::expr::Expr::Application(e1, e2, _) => free(e1).union(free(e2)),
+        expr::expr::Expr::Constructor(..)
+        | expr::expr::Expr::Operator(..)
+        | expr::expr::Expr::Number(_)
+        | expr::expr::Expr::Boolean(_) => HashSet::new(),
+        expr::expr::Expr::Variable(var, _) => HashSet::unit(var.clone()),
+        expr::expr::Expr::Record(r) => r.values().flat_map(free).collect(),
+        expr::expr::Expr::Tuple(es) => es.iter().flat_map(free).collect(),
+        expr::expr::Expr::If(p, c, a) => free(p).union(free(c)).union(free(a)),
+        expr::expr::Expr::Block(b) => free_block(b),
+        expr::expr::Expr::Match(matchand, arms, _) => free(matchand).union(
+            arms.iter()
+                .flat_map(|(pattern, expr)| free(expr).relative_complement(pattern.bound_vars()))
+                .collect(),
+        ),
     }
 }
 
-impl Display for Symbol {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "%{}", self.value)
-    }
-}
-
-impl Display for Environment {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[ ")?;
-
-        for capture in &self.captures {
-            write!(f, "{} ", capture)?;
-        }
-
-        write!(f, "]")
-    }
-}
-
-impl Display for Variable {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Variable::Local(var) => write!(f, "{}", var),
-            Variable::Captured(var) => write!(f, "%{}", var)
-        }
-    }
-}
-
-impl Display for Literal {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Literal::Number(num) => write!(f, "{}", num),
-            Literal::Boolean(b) => write!(f, "{}", b),
-            Literal::Variable(var) => write!(f, "{}", var),
-            Literal::Closure(name, env) => write!(f, "({}, {})", name.value, env)
-        }
-    }
-}
-
-impl Display for Program {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        for (name, func) in &self.functions {
-            writeln!(f, "let {} = fn {} -> {}", name, func.parameter, func.body)?;
-        }
-
-        writeln!(f, "{}", self.main)
+fn free_block<A: Clone>(b: &[expr::expr::Statement<A>]) -> HashSet<String> {
+    match b {
+        [expr::expr::Statement::Let(pattern, body, _), rest @ ..] => free(body)
+            .union(free_block(rest))
+            .relative_complement(pattern.bound_vars()),
+        [expr::expr::Statement::Raw(e), rest @ ..] => free(e).union(free_block(rest)),
+        [expr::expr::Statement::TypeDef(..), rest @ ..] => free_block(rest),
+        [] => HashSet::new(),
     }
 }
