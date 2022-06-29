@@ -5,8 +5,9 @@ use expr::{
 };
 use im::{HashMap, HashSet};
 use std::cell::Cell;
-use std::fmt::{Display, Formatter};
+use std::fmt::{Display, Formatter, Debug};
 use std::rc::Rc;
+use itertools::multiunzip;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Symbol {
@@ -141,8 +142,33 @@ pub fn deconstruct_pattern(
             };
             (bindings, vec![stmt])
         },
+        Pattern::Tuple(elems) => {
+            let tuple_var = variable_supply.fresh();
+            let tuple_stmt = Statement {
+                result: tuple_var,
+                result_type: pattern.get_type(),
+                expr: Expr::Variable(binding)
+            };
+
+            let mut bindings = HashMap::new();
+            let mut statements = vec![tuple_stmt];
+
+            for (idx, elem) in elems.iter().enumerate() {
+                let result = variable_supply.fresh();
+                let stmt = Statement {
+                    result,
+                    result_type: elem.get_type(),
+                    expr: Expr::TupleIndex(tuple_var, idx)
+                };
+                statements.push(stmt);
+                let (elem_bindings, elem_stmts) = deconstruct_pattern(elem, Variable::Local(result), variable_supply);
+                bindings.extend(elem_bindings);
+                statements.extend(elem_stmts);
+            }
+
+            (bindings, statements)
+        }
         Pattern::Record(_) => todo!(),
-        Pattern::Tuple(_) => todo!(),
         Pattern::Construction(_, _, _) => todo!(),
     }
 }
@@ -305,7 +331,6 @@ pub fn lift(
         }
         expr::expr::Expr::Operator(op, _) => {
             let supply = SymbolSupply::new();
-            let supply = SymbolSupply::new();
 
             let inner_symbol = function_supply.fresh();
             let outer_symbol = function_supply.fresh();
@@ -372,12 +397,51 @@ pub fn lift(
                 .with_function(outer_symbol, outer_def)
                 .with_function(inner_symbol, inner_def)
         },
-        expr::expr::Expr::Tuple(_) => todo!(),
-        expr::expr::Expr::Constructor(_, _) => todo!(),
-        expr::expr::Expr::Record(_) => todo!(),
+        expr::expr::Expr::Tuple(elems) => {
+            tagged_tuple(elems.iter(), expr.get_type(), 0, variables, variable_supply, function_supply)
+        }
+        expr::expr::Expr::Record(elems) => {
+            let mut sorted_elems: Vec<_> = elems.into_iter().collect();
+            sorted_elems.sort_by_key(|(key, _)| *key);
+
+            tagged_tuple(sorted_elems.into_iter().map(|(_, val)| val), expr.get_type(), 0, variables, variable_supply, function_supply)
+        }
         expr::expr::Expr::Match(_, _, _) => todo!(),
         expr::expr::Expr::Block(_) => todo!(),
+        expr::expr::Expr::Constructor(_, _) => todo!()
     }
+}
+
+fn tagged_tuple<'a>(elems: impl IntoIterator<Item = &'a expr::expr::Expr<Type<Kind>>>, expr_type: Type<Kind>, tag: usize, variables: HashMap<String, Variable>, variable_supply: &SymbolSupply, function_supply: &SymbolSupply) -> Program {
+    let elem_progs = elems.into_iter().map(|expr| lift(expr, variables.clone(), variable_supply, function_supply));
+    let (results, functions, blocks): (Vec<_>, Vec<_>, Vec<_>) = multiunzip(
+        elem_progs
+            .map(|prog| (prog.main.result, prog.functions, prog.main.statements))
+    );
+
+    let result = variable_supply.fresh();
+
+    let tuple_stmt = Statement {
+        result,
+        result_type: expr_type,
+        expr: Expr::TaggedTuple(tag, results)
+    };
+
+    let mut block = Block::unit(result);
+
+    for stmt in blocks.into_iter().flatten() {
+        block = block.with_statement(stmt);
+    }
+
+    block = block.with_statement(tuple_stmt);
+
+    let mut prog = Program::new(block);
+
+    for (name, def) in functions.into_iter().flatten() {
+        prog = prog.with_function(name, def);
+    }
+
+    prog
 }
 
 fn free<A: Clone>(e: &expr::expr::Expr<A>) -> HashSet<String> {

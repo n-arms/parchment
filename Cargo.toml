@@ -15,6 +15,7 @@ code_gen = { path = "./code_gen" }
 expr = { path = "./expr" }
 type_checker = { path = "./type_checker" }
 im = "15.0.0"
+itertools = "0.10.3"
 
 [workspace]
 members = [

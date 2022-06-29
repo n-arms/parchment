@@ -263,7 +263,7 @@ fn main() -> io::Result<()> {
 
 fn main() {
     let text = "
-    if 5 >= 10 then (fn x -> x) 17 else 42
+    fn (a, b) -> a + b
     ";
     let ast = parse_ast(text).unwrap();
 
