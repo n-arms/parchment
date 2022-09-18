@@ -263,11 +263,12 @@ fn main() -> io::Result<()> {
 
 fn main() {
     let text = "
-    fn (a, b) -> a + b
+    fn (a, b) -> a
     ";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
+    println!("{:#?}", typed_ast.get_type());
 
     let lifted = code_gen::high_ir::lift(
         &typed_ast,
@@ -276,7 +277,7 @@ fn main() {
         &code_gen::high_ir::SymbolSupply::new(),
     );
 
-    println!("{:#?}", lifted);
+    //println!("{:#?}", lifted);
 }
 
 #[cfg(test)]

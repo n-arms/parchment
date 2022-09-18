@@ -60,7 +60,7 @@ impl Expr<Type<Kind>> {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Copy)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Copy)]
 pub enum Operator {
     Plus,
     Minus,
@@ -78,7 +78,7 @@ impl Operator {
     pub fn get_type(&self) -> Type<Kind> {
         Type::Arrow(
             Rc::new(self.first_arg_type()),
-            Rc::new(self.half_applied_type())
+            Rc::new(self.half_applied_type()),
         )
     }
 
@@ -88,46 +88,42 @@ impl Operator {
 
     pub fn first_arg_type(&self) -> Type<Kind> {
         match self {
-            Operator::Plus |
-            Operator::Minus |
-            Operator::Times |
-            Operator::Equals |
-            Operator::LessThan |
-            Operator::LessThanEqual |
-            Operator::GreaterThan |
-            Operator::GreaterThanEqual => num_type(),
-            Operator::And |
-            Operator::Or => bool_type()
+            Operator::Plus
+            | Operator::Minus
+            | Operator::Times
+            | Operator::Equals
+            | Operator::LessThan
+            | Operator::LessThanEqual
+            | Operator::GreaterThan
+            | Operator::GreaterThanEqual => num_type(),
+            Operator::And | Operator::Or => bool_type(),
         }
     }
 
     pub fn second_arg_type(&self) -> Type<Kind> {
         match self {
-            Operator::Plus |
-            Operator::Minus |
-            Operator::Times |
-            Operator::Equals |
-            Operator::LessThan |
-            Operator::LessThanEqual |
-            Operator::GreaterThan |
-            Operator::GreaterThanEqual => num_type(),
-            Operator::And |
-            Operator::Or => bool_type()
+            Operator::Plus
+            | Operator::Minus
+            | Operator::Times
+            | Operator::Equals
+            | Operator::LessThan
+            | Operator::LessThanEqual
+            | Operator::GreaterThan
+            | Operator::GreaterThanEqual => num_type(),
+            Operator::And | Operator::Or => bool_type(),
         }
     }
 
     pub fn result_type(&self) -> Type<Kind> {
         match self {
-            Operator::Plus |
-            Operator::Minus |
-            Operator::Times => num_type(),
-            Operator::Equals |
-            Operator::LessThan |
-            Operator::LessThanEqual |
-            Operator::GreaterThan |
-            Operator::GreaterThanEqual |
-            Operator::And |
-            Operator::Or => bool_type()
+            Operator::Plus | Operator::Minus | Operator::Times => num_type(),
+            Operator::Equals
+            | Operator::LessThan
+            | Operator::LessThanEqual
+            | Operator::GreaterThan
+            | Operator::GreaterThanEqual
+            | Operator::And
+            | Operator::Or => bool_type(),
         }
     }
 }
