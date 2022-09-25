@@ -37,6 +37,23 @@ impl Type<Kind> {
             Type::Tuple(_) | Type::Record(_) | Type::Arrow(_, _) => Kind::default(),
         }
     }
+
+    pub fn type_vars(&self) -> HashSet<Var> {
+        match self {
+            Type::Variable(var, _) => HashSet::unit(Rc::clone(var)),
+            Type::Arrow(left, right) => left.type_vars().union(right.type_vars()),
+            Type::Tuple(tuple) => tuple
+                .into_iter()
+                .map(Type::type_vars)
+                .fold(HashSet::new(), HashSet::union),
+            Type::Record(record) => record
+                .values()
+                .map(Type::type_vars)
+                .fold(HashSet::new(), HashSet::union),
+            Type::Application(_, right, _) => right.type_vars(),
+            Type::Constant(_, _) => HashSet::new(),
+        }
+    }
 }
 
 impl<K: Clone + Debug + PartialEq + Eq + PartialOrd + Ord + Hash> Type<K> {

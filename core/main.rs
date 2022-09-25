@@ -15,11 +15,7 @@
     clippy::self_named_module_files
 )]
 
-use code_gen::{
-    code_gen::emit_program,
-    lift::lift,
-    wasm::{WATFormatter, Wasm},
-};
+use code_gen::wasm::{WATFormatter, Wasm};
 use expr::{
     expr::Expr,
     fmt::{format, Pretty},
@@ -128,19 +124,61 @@ fn infer_types(
     Some((final_expr, type_defs))
 }
 
-fn generate_wasm(
-    typed_ast: &Expr<Type<Kind>>,
-    type_defs: HashMap<String, TypeDef<Kind>>,
-    debug: bool,
-) -> Wasm {
-    let lifted = lift(typed_ast, &[], &code_gen::lift::State::new(type_defs));
+/*
+fn process_text(lines: &str, state: &ReplState) -> Option<()> {
+    let ast = parse_ast(lines)?;
 
-    if debug {
-        println!("{:#?}", lifted);
+    let (typed_ast, type_defs) = infer_types(&ast, state.type_debug)?;
+
+    let wasm = generate_wasm(&typed_ast, type_defs, state.lift_debug);
+
+    if state.eval {
+        println!("= {}", run_wasm(&wasm, typed_ast.get_type())?);
     }
 
-    emit_program(lifted)
+    Some(())
 }
+fn main() -> io::Result<()> {
+    let stdin = io::stdin();
+    let mut lines = stdin.lock().lines().map(Result::unwrap);
+    let mut state = ReplState {
+        type_debug: false,
+        lift_debug: false,
+        eval: true,
+    };
+    loop {
+        println!("====");
+        let next = if let Some(l) = lines.next() {
+            l
+        } else {
+            println!("thank you for using parchment.");
+            return Ok(());
+        };
+
+        let stripped: String = next
+            .chars()
+            .filter(|c| !c.is_whitespace() && *c != ' ')
+            .map(|c| c.to_ascii_lowercase())
+            .collect();
+
+        match &stripped[..] {
+            "+typedebug" => state.type_debug = true,
+            "-typedebug" => state.type_debug = false,
+            "+liftdebug" => state.lift_debug = true,
+            "-liftdebug" => state.lift_debug = false,
+            "+eval" => state.eval = true,
+            "-eval" => state.eval = false,
+            "quit" => {
+                println!("thank you for using parchment.");
+                return Ok(());
+            }
+            _ => {
+                process_text(&read_ast(next, &mut lines), &state);
+            }
+        }
+    }
+}
+*/
 
 fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
     let target = "temp.wat";
@@ -205,79 +243,14 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
     })
 }
 
-fn process_text(lines: &str, state: &ReplState) -> Option<()> {
-    let ast = parse_ast(lines)?;
-
-    let (typed_ast, type_defs) = infer_types(&ast, state.type_debug)?;
-
-    let wasm = generate_wasm(&typed_ast, type_defs, state.lift_debug);
-
-    if state.eval {
-        println!("= {}", run_wasm(&wasm, typed_ast.get_type())?);
-    }
-
-    Some(())
-}
-/*
-fn main() -> io::Result<()> {
-    let stdin = io::stdin();
-    let mut lines = stdin.lock().lines().map(Result::unwrap);
-    let mut state = ReplState {
-        type_debug: false,
-        lift_debug: false,
-        eval: true,
-    };
-    loop {
-        println!("====");
-        let next = if let Some(l) = lines.next() {
-            l
-        } else {
-            println!("thank you for using parchment.");
-            return Ok(());
-        };
-
-        let stripped: String = next
-            .chars()
-            .filter(|c| !c.is_whitespace() && *c != ' ')
-            .map(|c| c.to_ascii_lowercase())
-            .collect();
-
-        match &stripped[..] {
-            "+typedebug" => state.type_debug = true,
-            "-typedebug" => state.type_debug = false,
-            "+liftdebug" => state.lift_debug = true,
-            "-liftdebug" => state.lift_debug = false,
-            "+eval" => state.eval = true,
-            "-eval" => state.eval = false,
-            "quit" => {
-                println!("thank you for using parchment.");
-                return Ok(());
-            }
-            _ => {
-                process_text(&read_ast(next, &mut lines), &state);
-            }
-        }
-    }
-}
-*/
-
 fn main() {
     let text = "
-    fn (a, b) -> a
+    fn a -> fn b -> a
     ";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
     println!("{:#?}", typed_ast.get_type());
-
-    let lifted = code_gen::high_ir::lift(
-        &typed_ast,
-        HashMap::new(),
-        &code_gen::high_ir::SymbolSupply::new(),
-        &code_gen::high_ir::SymbolSupply::new(),
-    );
-
-    //println!("{:#?}", lifted);
 }
 
 #[cfg(test)]

@@ -23,8 +23,7 @@
     clippy::cast_precision_loss
 )]
 
-pub mod code_gen;
 pub mod desugar;
-pub mod high_ir;
 pub mod lift;
+pub mod variable;
 pub mod wasm;

@@ -37,6 +37,43 @@ pub enum Expr<A: std::clone::Clone> {
 }
 
 impl Expr<Type<Kind>> {
+    pub fn free_vars(&self) -> HashSet<(String, Type<Kind>)> {
+        match self {
+            Expr::Function(pattern, body, _) => {
+                body.free_vars().relative_complement(pattern.bound_vars())
+            }
+            Expr::Application(e1, e2, _) => e1.free_vars().union(e2.free_vars()),
+            Expr::Constructor(..) | Expr::Operator(..) | Expr::Number(_) | Expr::Boolean(_) => {
+                HashSet::new()
+            }
+            Expr::Variable(var, var_type) => HashSet::unit((var.clone(), var_type.clone())),
+            Expr::Record(r) => r.values().flat_map(Expr::free_vars).collect(),
+            Expr::Tuple(es) => es.iter().flat_map(Expr::free_vars).collect(),
+            Expr::If(p, c, a) => p.free_vars().union(c.free_vars()).union(a.free_vars()),
+            Expr::Block(b) => free_block(b),
+            Expr::Match(matchand, arms, _) => matchand.free_vars().union(
+                arms.iter()
+                    .flat_map(|(pattern, expr)| {
+                        expr.free_vars().relative_complement(pattern.bound_vars())
+                    })
+                    .collect(),
+            ),
+        }
+    }
+}
+
+fn free_block(b: &[Statement<Type<Kind>>]) -> HashSet<(String, Type<Kind>)> {
+    match b {
+        [Statement::Let(pattern, body, _), rest @ ..] => body
+            .free_vars()
+            .union(free_block(rest))
+            .relative_complement(pattern.bound_vars()),
+        [Statement::Raw(e), rest @ ..] => e.free_vars().union(free_block(rest)),
+        [Statement::TypeDef(..), rest @ ..] => free_block(rest),
+        [] => HashSet::new(),
+    }
+}
+impl Expr<Type<Kind>> {
     pub fn get_type(&self) -> Type<Kind> {
         match self {
             Expr::Function(_, body, pattern_type) => {
@@ -449,10 +486,10 @@ impl<A: std::clone::Clone + std::fmt::Debug> fmt::Display for Pattern<A> {
     }
 }
 
-impl<A: std::clone::Clone> Pattern<A> {
-    pub fn bound_vars(&self) -> HashSet<String> {
+impl Pattern<Type<Kind>> {
+    pub fn bound_vars(&self) -> HashSet<(String, Type<Kind>)> {
         match self {
-            Pattern::Variable(v, _) => HashSet::unit(v.clone()),
+            Pattern::Variable(v, var_type) => HashSet::unit((v.clone(), var_type.clone())),
             Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
             Pattern::Construction(_, t, _) | Pattern::Tuple(t) => {
                 t.iter().flat_map(Pattern::bound_vars).collect()
