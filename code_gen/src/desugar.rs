@@ -226,6 +226,7 @@ pub fn desugar_expr<'a>(
             )
         }
         expr::expr::Expr::Number(number) => Expr::Literal(Literal::Number(*number)),
+        expr::expr::Expr::Boolean(boolean) => Expr::Literal(Literal::Boolean(*boolean)),
         expr::expr::Expr::Block(block) => {
             desugar_block(block.as_slice(), variable_source, environment)
         }
@@ -248,8 +249,24 @@ pub fn desugar_expr<'a>(
 
             Expr::Tuple(Tag::new(0), Rc::new(type_definition), desugared_fields)
         }
-        expr::expr::Expr::Boolean(_) => todo!(),
-        expr::expr::Expr::Operator(_, _) => todo!(),
+        expr::expr::Expr::Operator(operator, _) => {
+            let argument_type = desugar_type(&operator.argument_type(), environment.clone());
+            let left_argument = variable_source.fresh(argument_type.clone());
+            let right_argument = variable_source.fresh(argument_type);
+            Expr::Function(
+                vec![left_argument.clone()],
+                Box::new(Expr::Function(
+                    vec![right_argument.clone()],
+                    Box::new(Expr::CallBuiltin(
+                        Builtin::Operator(*operator),
+                        vec![
+                            Expr::Variable(left_argument),
+                            Expr::Variable(right_argument),
+                        ],
+                    )),
+                )),
+            )
+        }
         expr::expr::Expr::Record(_) => todo!(),
         expr::expr::Expr::If(_, _, _) => todo!(),
         expr::expr::Expr::Constructor(_, _) => todo!(),

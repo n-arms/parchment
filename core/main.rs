@@ -254,10 +254,7 @@ fn main() {
     }";
     */
 
-    let text = "{
-        let f = fn a -> fn b -> a;
-        f 5 (6, 7);
-    }";
+    let text = "5 + 6";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();

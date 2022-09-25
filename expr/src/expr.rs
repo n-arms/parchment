@@ -112,32 +112,7 @@ pub enum Operator {
 }
 
 impl Operator {
-    pub fn get_type(&self) -> Type<Kind> {
-        Type::Arrow(
-            Rc::new(self.first_arg_type()),
-            Rc::new(self.half_applied_type()),
-        )
-    }
-
-    pub fn half_applied_type(&self) -> Type<Kind> {
-        Type::Arrow(Rc::new(self.second_arg_type()), Rc::new(self.result_type()))
-    }
-
-    pub fn first_arg_type(&self) -> Type<Kind> {
-        match self {
-            Operator::Plus
-            | Operator::Minus
-            | Operator::Times
-            | Operator::Equals
-            | Operator::LessThan
-            | Operator::LessThanEqual
-            | Operator::GreaterThan
-            | Operator::GreaterThanEqual => num_type(),
-            Operator::And | Operator::Or => bool_type(),
-        }
-    }
-
-    pub fn second_arg_type(&self) -> Type<Kind> {
+    pub fn argument_type(&self) -> Type<Kind> {
         match self {
             Operator::Plus
             | Operator::Minus
@@ -162,6 +137,16 @@ impl Operator {
             | Operator::And
             | Operator::Or => bool_type(),
         }
+    }
+
+    pub fn get_type(&self) -> Type<Kind> {
+        Type::Arrow(
+            Rc::new(self.argument_type()),
+            Rc::new(Type::Arrow(
+                Rc::new(self.argument_type()),
+                Rc::new(self.result_type()),
+            )),
+        )
     }
 }
 

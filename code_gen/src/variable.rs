@@ -28,6 +28,7 @@ pub struct TypeDefinition {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Primitive {
     Number,
+    Boolean,
     Void,
 }
 
@@ -115,6 +116,7 @@ pub enum Builtin {
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub enum Literal {
     Number(f64),
+    Boolean(bool),
 }
 
 #[derive(Default)]
