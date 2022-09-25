@@ -18,7 +18,7 @@ pub enum Expr {
     Function(Vec<Variable>, Box<Expr>),
     Tuple(Tag, Rc<TypeDefinition>, Vec<Expr>),
     TupleIndex(Box<Expr>, usize),
-    Specialize(Variable, Vec<Identifier>),
+    Specialize(Variable, Vec<Type>),
     Variable(Variable),
     Literal(Literal),
     Switch(Box<Expr>, Vec<(Tag, Expr)>),
@@ -27,7 +27,7 @@ pub enum Expr {
     Let(Vec<Identifier>, Box<Binding>, Box<Expr>),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SpecializeTemplate {
     polymorphic_type: Type,
     type_arguments: Vec<Identifier>,
@@ -47,11 +47,31 @@ impl<'a> VariableEnvironment<'a> {
         &self,
         value: Variable,
         pattern: &'a Pattern<types::Type<Kind>>,
+        variable_source: &mut VariableSource,
     ) -> (VariableEnvironment<'a>, Vec<Binding>) {
         match pattern {
             Pattern::Variable(variable, _) => (self.bind_variable(variable, value), Vec::new()),
+            Pattern::Tuple(fields) => {
+                let mut bindings = Vec::new();
+                let mut inner_environment = self.clone();
+
+                for (index, field) in fields.into_iter().enumerate() {
+                    let field_value =
+                        variable_source.fresh(desugar_type(&field.get_type(), self.clone()));
+                    let binding = Binding {
+                        variable: field_value.clone(),
+                        value: Expr::TupleIndex(Box::new(Expr::Variable(value.clone())), index),
+                    };
+                    bindings.push(binding);
+                    let (field_environment, field_bindings) =
+                        inner_environment.bind_pattern(field_value, field, variable_source);
+                    bindings.extend(field_bindings);
+                    inner_environment = field_environment;
+                }
+
+                (inner_environment, bindings)
+            }
             Pattern::Record(_) => todo!(),
-            Pattern::Tuple(_) => todo!(),
             Pattern::Construction(_, _, _) => todo!(),
         }
     }
@@ -72,17 +92,58 @@ impl<'a> VariableEnvironment<'a> {
         self.type_variable_bindings.get(variable).copied()
     }
 
-    pub fn lookup_variable(&self, variable_name: &'a str) -> Expr {
+    pub fn lookup_variable(&self, variable_name: &'a str, variable_type: Type) -> Expr {
         let desugared_variable = self.variable_bindings.get(variable_name).unwrap();
         let template = self
             .polymorphic_variables
             .get(&desugared_variable.identifier());
 
         if let Some(template) = template {
-            todo!()
+            let general_type = template.polymorphic_type.clone();
+            let unification = Type::unify(general_type, variable_type);
+            println!("generated unification\n\t{:#?}", unification);
+
+            let mut type_arguments = Vec::new();
+
+            for type_variable in &template.type_arguments {
+                type_arguments.push(unification.get(type_variable).unwrap().clone());
+            }
+
+            Expr::Specialize(desugared_variable.clone(), type_arguments)
         } else {
             Expr::Variable(desugared_variable.clone())
         }
+    }
+
+    fn bind_polymorphic_variable(
+        &self,
+        variable_name: &'a str,
+        variable: Variable,
+        template: SpecializeTemplate,
+    ) -> Self {
+        let mut environment = self.bind_variable(variable_name, variable.clone());
+        environment
+            .polymorphic_variables
+            .insert(variable.identifier(), template);
+        environment
+    }
+
+    fn qualify_type_vars(
+        &self,
+        type_vars: im::HashSet<Var>,
+        variable_source: &mut VariableSource,
+    ) -> (Self, Vec<Identifier>) {
+        let mut environment = self.clone();
+        let mut qualified_vars = Vec::new();
+        for type_var in type_vars {
+            let variable = variable_source.fresh(Type::Type);
+            environment
+                .type_variable_bindings
+                .insert(type_var, variable.identifier());
+            qualified_vars.push(variable.identifier());
+        }
+
+        (environment, qualified_vars)
     }
 }
 
@@ -116,7 +177,19 @@ pub fn desugar_type(r#type: &types::Type<Kind>, environment: VariableEnvironment
             vec![desugar_type(argument, environment.clone())],
             Box::new(desugar_type(return_type, environment)),
         ),
-        types::Type::Tuple(_) => todo!(),
+        types::Type::Tuple(fields) => {
+            let desugared_fields: Vec<_> = fields
+                .into_iter()
+                .map(|field| desugar_type(field, environment.clone()))
+                .collect();
+            let type_definition = TypeDefinition {
+                variants: vec![Variant {
+                    tag: Tag::new(0),
+                    arguments: desugared_fields.clone(),
+                }],
+            };
+            Type::Tuple(Rc::new(type_definition), desugared_fields)
+        }
         types::Type::Record(_) => todo!(),
         types::Type::Application(_, _, _) => todo!(),
     }
@@ -131,7 +204,8 @@ pub fn desugar_expr<'a>(
         expr::expr::Expr::Function(pattern, body, _) => {
             let argument =
                 variable_source.fresh(desugar_type(&pattern.get_type(), environment.clone()));
-            let (body_environment, bindings) = environment.bind_pattern(argument.clone(), pattern);
+            let (body_environment, bindings) =
+                environment.bind_pattern(argument.clone(), pattern, variable_source);
             let mut desugared_body = desugar_expr(body.as_ref(), variable_source, body_environment);
             for binding in bindings.into_iter().rev() {
                 desugared_body = Expr::Let(Vec::new(), Box::new(binding), Box::new(desugared_body));
@@ -144,18 +218,106 @@ pub fn desugar_expr<'a>(
             let desugared_argument = desugar_expr(argument.as_ref(), variable_source, environment);
             Expr::CallFunction(Box::new(desugared_function), vec![desugared_argument])
         }
-        expr::expr::Expr::Variable(variable_name, _) => {
+        expr::expr::Expr::Variable(variable_name, variable_type) => {
             // consult the env, instatiating the variable if necessary
-            environment.lookup_variable(variable_name)
+            environment.lookup_variable(
+                variable_name,
+                desugar_type(variable_type, environment.clone()),
+            )
         }
         expr::expr::Expr::Number(number) => Expr::Literal(Literal::Number(*number)),
-        expr::expr::Expr::Block(_) => todo!(),
+        expr::expr::Expr::Block(block) => {
+            desugar_block(block.as_slice(), variable_source, environment)
+        }
+        expr::expr::Expr::Tuple(fields) => {
+            let mut desugared_fields = Vec::new();
+            let mut type_fields = Vec::new();
+
+            for field in fields {
+                let desugared_field = desugar_expr(field, variable_source, environment.clone());
+                desugared_fields.push(desugared_field);
+                type_fields.push(desugar_type(&field.get_type(), environment.clone()));
+            }
+
+            let type_definition = TypeDefinition {
+                variants: vec![Variant {
+                    tag: Tag::new(0),
+                    arguments: type_fields.clone(),
+                }],
+            };
+
+            Expr::Tuple(Tag::new(0), Rc::new(type_definition), desugared_fields)
+        }
         expr::expr::Expr::Boolean(_) => todo!(),
         expr::expr::Expr::Operator(_, _) => todo!(),
         expr::expr::Expr::Record(_) => todo!(),
         expr::expr::Expr::If(_, _, _) => todo!(),
-        expr::expr::Expr::Tuple(_) => todo!(),
         expr::expr::Expr::Constructor(_, _) => todo!(),
         expr::expr::Expr::Match(_, _, _) => todo!(),
+    }
+}
+
+fn desugar_block<'a>(
+    block: &'a [expr::expr::Statement<types::Type<Kind>>],
+    variable_source: &mut VariableSource,
+    environment: VariableEnvironment<'a>,
+) -> Expr {
+    match block {
+        [expr::expr::Statement::Raw(expr)] => desugar_expr(expr, variable_source, environment),
+        [expr::expr::Statement::Raw(expr), rest @ ..] => {
+            let result_variable =
+                variable_source.fresh(desugar_type(&expr.get_type(), environment.clone()));
+            let binding = Binding {
+                variable: result_variable,
+                value: desugar_expr(expr, variable_source, environment.clone()),
+            };
+            Expr::Let(
+                Vec::new(),
+                Box::new(binding),
+                Box::new(desugar_block(rest, variable_source, environment)),
+            )
+        }
+        [expr::expr::Statement::Let(Pattern::Variable(variable, variable_type), expr, _), rest @ ..] =>
+        {
+            let (environment, type_arguments) =
+                environment.qualify_type_vars(variable_type.type_vars(), variable_source);
+            let expr_type = desugar_type(&expr.get_type(), environment.clone());
+            let result_variable = variable_source.fresh(expr_type.clone());
+            let template = SpecializeTemplate {
+                polymorphic_type: expr_type,
+                type_arguments: type_arguments.clone(),
+            };
+            let environment =
+                environment.bind_polymorphic_variable(variable, result_variable.clone(), template);
+            let binding = Binding {
+                variable: result_variable,
+                value: desugar_expr(expr, variable_source, environment.clone()),
+            };
+            Expr::Let(
+                type_arguments,
+                Box::new(binding),
+                Box::new(desugar_block(rest, variable_source, environment)),
+            )
+        }
+        [expr::expr::Statement::Let(pattern, expr, _), rest @ ..] => {
+            let result_variable =
+                variable_source.fresh(desugar_type(&expr.get_type(), environment.clone()));
+            let (inner_environment, bindings) =
+                environment.bind_pattern(result_variable.clone(), pattern, variable_source);
+            let mut desugared_block = desugar_block(rest, variable_source, inner_environment);
+            for binding in bindings.into_iter().rev() {
+                desugared_block =
+                    Expr::Let(Vec::new(), Box::new(binding), Box::new(desugared_block))
+            }
+            let binding = Binding {
+                variable: result_variable,
+                value: desugar_expr(expr, variable_source, environment),
+            };
+            Expr::Let(Vec::new(), Box::new(binding), Box::new(desugared_block))
+        }
+        [expr::expr::Statement::TypeDef(..), rest @ ..] => {
+            desugar_block(rest, variable_source, environment)
+        }
+        [] => panic!("cannot compile a block that doesn't produce a result"),
     }
 }

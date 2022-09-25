@@ -1,4 +1,5 @@
 use expr::expr::Operator;
+use im::HashMap;
 use std::fmt::{Debug, Formatter};
 use std::rc::Rc;
 
@@ -7,15 +8,21 @@ pub struct Tag {
     tag: usize,
 }
 
+impl Tag {
+    pub fn new(tag: usize) -> Tag {
+        Tag { tag }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variant {
-    tag: Tag,
-    arguments: Vec<Type>,
+    pub tag: Tag,
+    pub arguments: Vec<Type>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TypeDefinition {
-    variants: Vec<Variant>,
+    pub variants: Vec<Variant>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -31,6 +38,43 @@ pub enum Type {
     Tuple(Rc<TypeDefinition>, Vec<Type>),
     Primitive(Primitive),
     Type,
+}
+
+impl Type {
+    pub fn unify(general: Type, specialized: Type) -> HashMap<Identifier, Type> {
+        match (general, specialized) {
+            (Type::Variable(id), specialized) => HashMap::unit(id, specialized),
+            (
+                Type::Function(general_arguments, general_return),
+                Type::Function(specialized_arguments, specialized_return),
+            ) => {
+                let mut unification = HashMap::new();
+                let arguments = general_arguments
+                    .into_iter()
+                    .zip(specialized_arguments.into_iter());
+                for (general_argument, specialized_argument) in arguments {
+                    unification.extend(Type::unify(general_argument, specialized_argument));
+                }
+                unification.extend(Type::unify(*general_return, *specialized_return));
+                unification
+            }
+            (Type::Primitive(_), Type::Primitive(_)) => HashMap::new(),
+            (Type::Type, Type::Type) => HashMap::new(),
+            (Type::Tuple(_, general_fields), Type::Tuple(_, specialized_fields)) => {
+                let mut unification = HashMap::new();
+                let fields = general_fields
+                    .into_iter()
+                    .zip(specialized_fields.into_iter());
+                for (general_field, specialized_field) in fields {
+                    unification.extend(Type::unify(general_field, specialized_field));
+                }
+                unification
+            }
+            (general, specialized) => {
+                panic!("cannot unify types {:?} and {:?}", general, specialized)
+            }
+        }
+    }
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -99,5 +143,15 @@ impl Debug for Identifier {
 impl Debug for Variable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{:?} : {:?}", self.variable_name, self.variable_type)
+    }
+}
+
+pub trait Typeable {
+    fn get_type(&self) -> Type;
+}
+
+impl Typeable for Variable {
+    fn get_type(&self) -> Type {
+        self.variable_type.clone()
     }
 }
