@@ -15,7 +15,10 @@
     clippy::self_named_module_files
 )]
 
-use code_gen::wasm::{WATFormatter, Wasm};
+use code_gen::{
+    desugar::{desugar_expr, VariableEnvironment, VariableSource},
+    wasm::{WATFormatter, Wasm},
+};
 use expr::{
     expr::Expr,
     fmt::{format, Pretty},
@@ -244,13 +247,18 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
 }
 
 fn main() {
-    let text = "
-    fn a -> fn b -> a
-    ";
+    let text = "(fn a -> a 5) (fn a -> a)";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
-    println!("{:#?}", typed_ast.get_type());
+
+    println!("{:#?}", typed_ast);
+
+    let mut vars = VariableSource::default();
+    let env = VariableEnvironment::default();
+    let desugared_expr = desugar_expr(&typed_ast, &mut vars, env);
+
+    println!("{:#?}", desugared_expr);
 }
 
 #[cfg(test)]

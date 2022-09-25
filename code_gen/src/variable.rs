@@ -21,6 +21,7 @@ pub struct TypeDefinition {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Primitive {
     Number,
+    Void,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -37,10 +38,29 @@ pub struct Identifier {
     id: usize,
 }
 
+impl Identifier {
+    pub fn new(id: usize) -> Identifier {
+        Identifier { id }
+    }
+}
+
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Variable {
-    var: Identifier,
-    var_type: Type,
+    variable_name: Identifier,
+    variable_type: Type,
+}
+
+impl Variable {
+    pub fn identifier(&self) -> Identifier {
+        self.variable_name
+    }
+
+    pub fn new(variable_name: Identifier, variable_type: Type) -> Variable {
+        Variable {
+            variable_name,
+            variable_type,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
@@ -53,6 +73,23 @@ pub enum Literal {
     Number(f64),
 }
 
+#[derive(Default)]
+pub struct IdentifierSource {
+    highest: usize,
+}
+
+impl IdentifierSource {
+    pub fn new(highest: usize) -> Self {
+        IdentifierSource { highest }
+    }
+
+    pub fn fresh(&mut self) -> Identifier {
+        let id = self.highest;
+        self.highest += 1;
+        Identifier::new(id)
+    }
+}
+
 impl Debug for Identifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "%{}", self.id)
@@ -61,6 +98,6 @@ impl Debug for Identifier {
 
 impl Debug for Variable {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{:?} : {:?}", self.var, self.var_type)
+        write!(f, "{:?} : {:?}", self.variable_name, self.variable_type)
     }
 }

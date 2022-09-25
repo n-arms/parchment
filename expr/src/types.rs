@@ -158,7 +158,7 @@ impl Apply for Expr<Type<Kind>> {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Expr::Function(pattern, body, pattern_type) => Expr::Function(
-                pattern.clone(),
+                pattern.apply(s),
                 Box::new(body.apply(s)),
                 pattern_type.apply(s),
             ),
@@ -206,12 +206,36 @@ impl Apply for Statement<Type<Kind>> {
     fn apply(&self, s: &Substitution) -> Self {
         match self {
             Statement::Let(pattern, body, pattern_type) => {
-                Statement::Let(pattern.clone(), body.apply(s), pattern_type.apply(s))
+                Statement::Let(pattern.apply(s), body.apply(s), pattern_type.apply(s))
             }
             Statement::Raw(expr) => Statement::Raw(expr.apply(s)),
             Statement::TypeDef(name, tvs, body) => {
                 Statement::TypeDef(name.clone(), tvs.clone(), body.clone())
             }
+        }
+    }
+}
+
+impl Apply for Pattern<Type<Kind>> {
+    fn apply(&self, s: &Substitution) -> Self {
+        match self {
+            Pattern::Variable(variable, variable_type) => {
+                Pattern::Variable(variable.clone(), variable_type.apply(s))
+            }
+            Pattern::Record(fields) => Pattern::Record(
+                fields
+                    .into_iter()
+                    .map(|(key, value)| (key.clone(), value.apply(s)))
+                    .collect(),
+            ),
+            Pattern::Tuple(fields) => {
+                Pattern::Tuple(fields.into_iter().map(|field| field.apply(s)).collect())
+            }
+            Pattern::Construction(constructor, arguments, pattern_type) => Pattern::Construction(
+                constructor.clone(),
+                arguments.into_iter().map(|field| field.apply(s)).collect(),
+                pattern_type.apply(s),
+            ),
         }
     }
 }
