@@ -247,14 +247,7 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
 }
 
 fn main() {
-    /*
-    let text = "{
-        let (f, x) = (fn a -> a, 5);
-        f x;
-    }";
-    */
-
-    let text = "5 + 6";
+    let text = "fn x -> if x then false else true";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();

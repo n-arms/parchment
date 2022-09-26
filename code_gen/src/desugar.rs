@@ -71,7 +71,28 @@ impl<'a> VariableEnvironment<'a> {
 
                 (inner_environment, bindings)
             }
-            Pattern::Record(_) => todo!(),
+            Pattern::Record(fields) => {
+                let mut sorted_fields: Vec<_> = fields.into_iter().collect();
+                sorted_fields.sort_by_key(|(field_name, _)| *field_name);
+                let mut bindings = Vec::new();
+                let mut inner_environment = self.clone();
+
+                for (index, (_, field)) in sorted_fields.into_iter().enumerate() {
+                    let field_value =
+                        variable_source.fresh(desugar_type(&field.get_type(), self.clone()));
+                    let binding = Binding {
+                        variable: field_value.clone(),
+                        value: Expr::TupleIndex(Box::new(Expr::Variable(value.clone())), index),
+                    };
+                    bindings.push(binding);
+                    let (field_environment, field_bindings) =
+                        inner_environment.bind_pattern(field_value, field, variable_source);
+                    bindings.extend(field_bindings);
+                    inner_environment = field_environment;
+                }
+
+                (inner_environment, bindings)
+            }
             Pattern::Construction(_, _, _) => todo!(),
         }
     }
@@ -156,15 +177,28 @@ impl VariableSource {
     }
 }
 
+fn boolean_type() -> Type {
+    Type::Tuple(Rc::new(TypeDefinition {
+        variants: vec![
+            Variant {
+                tag: Tag::new(0),
+                arguments: Vec::new(),
+            },
+            Variant {
+                tag: Tag::new(1),
+                arguments: Vec::new(),
+            },
+        ],
+    }))
+}
+
 pub fn desugar_type(r#type: &types::Type<Kind>, environment: VariableEnvironment) -> Type {
     match r#type {
-        types::Type::Constant(constant, _) => {
-            if constant.as_ref() == "Num" {
-                Type::Primitive(Primitive::Number)
-            } else {
-                panic!("unknown type constant")
-            }
-        }
+        types::Type::Constant(constant, _) => match constant.as_str() {
+            "Num" => Type::Primitive(Primitive::Number),
+            "Bool" => boolean_type(),
+            _ => panic!("unknown type constant"),
+        },
         types::Type::Variable(variable, _) => {
             if let Some(desugared_variable) = environment.type_variable_binding(&variable) {
                 Type::Variable(desugared_variable)
@@ -185,12 +219,26 @@ pub fn desugar_type(r#type: &types::Type<Kind>, environment: VariableEnvironment
             let type_definition = TypeDefinition {
                 variants: vec![Variant {
                     tag: Tag::new(0),
-                    arguments: desugared_fields.clone(),
+                    arguments: desugared_fields,
                 }],
             };
-            Type::Tuple(Rc::new(type_definition), desugared_fields)
+            Type::Tuple(Rc::new(type_definition))
         }
-        types::Type::Record(_) => todo!(),
+        types::Type::Record(fields) => {
+            let mut sorted_fields: Vec<_> = fields.into_iter().collect();
+            sorted_fields.sort_by_key(|(field_name, _)| *field_name);
+            let desugared_fields: Vec<_> = sorted_fields
+                .into_iter()
+                .map(|(_, field)| desugar_type(field, environment.clone()))
+                .collect();
+            let type_definition = TypeDefinition {
+                variants: vec![Variant {
+                    tag: Tag::new(0),
+                    arguments: desugared_fields,
+                }],
+            };
+            Type::Tuple(Rc::new(type_definition))
+        }
         types::Type::Application(_, _, _) => todo!(),
     }
 }
@@ -231,23 +279,7 @@ pub fn desugar_expr<'a>(
             desugar_block(block.as_slice(), variable_source, environment)
         }
         expr::expr::Expr::Tuple(fields) => {
-            let mut desugared_fields = Vec::new();
-            let mut type_fields = Vec::new();
-
-            for field in fields {
-                let desugared_field = desugar_expr(field, variable_source, environment.clone());
-                desugared_fields.push(desugared_field);
-                type_fields.push(desugar_type(&field.get_type(), environment.clone()));
-            }
-
-            let type_definition = TypeDefinition {
-                variants: vec![Variant {
-                    tag: Tag::new(0),
-                    arguments: type_fields.clone(),
-                }],
-            };
-
-            Expr::Tuple(Tag::new(0), Rc::new(type_definition), desugared_fields)
+            desugar_tuple(fields.into_iter(), variable_source, environment)
         }
         expr::expr::Expr::Operator(operator, _) => {
             let argument_type = desugar_type(&operator.argument_type(), environment.clone());
@@ -267,11 +299,58 @@ pub fn desugar_expr<'a>(
                 )),
             )
         }
-        expr::expr::Expr::Record(_) => todo!(),
-        expr::expr::Expr::If(_, _, _) => todo!(),
+        expr::expr::Expr::Record(fields) => {
+            let mut sorted_fields: Vec<_> = fields.into_iter().collect();
+            sorted_fields.sort_by_key(|(field_name, _)| *field_name);
+            desugar_tuple(
+                sorted_fields.into_iter().map(|(_, field)| field),
+                variable_source,
+                environment,
+            )
+        }
+        expr::expr::Expr::If(predicate, branch_if, branch_else) => {
+            let desugared_predicate =
+                desugar_expr(predicate.as_ref(), variable_source, environment.clone());
+            let desugared_branch_if =
+                desugar_expr(branch_if.as_ref(), variable_source, environment.clone());
+            let desugared_branch_else =
+                desugar_expr(branch_else.as_ref(), variable_source, environment.clone());
+
+            Expr::Switch(
+                Box::new(desugared_predicate),
+                vec![
+                    (Tag::new(1), desugared_branch_if),
+                    (Tag::new(0), desugared_branch_else),
+                ],
+            )
+        }
         expr::expr::Expr::Constructor(_, _) => todo!(),
         expr::expr::Expr::Match(_, _, _) => todo!(),
     }
+}
+
+fn desugar_tuple<'a>(
+    fields: impl Iterator<Item = &'a expr::expr::Expr<types::Type<Kind>>>,
+    variable_source: &mut VariableSource,
+    environment: VariableEnvironment<'a>,
+) -> Expr {
+    let mut desugared_fields = Vec::new();
+    let mut type_fields = Vec::new();
+
+    for field in fields {
+        let desugared_field = desugar_expr(field, variable_source, environment.clone());
+        desugared_fields.push(desugared_field);
+        type_fields.push(desugar_type(&field.get_type(), environment.clone()));
+    }
+
+    let type_definition = TypeDefinition {
+        variants: vec![Variant {
+            tag: Tag::new(0),
+            arguments: type_fields.clone(),
+        }],
+    };
+
+    Expr::Tuple(Tag::new(0), Rc::new(type_definition), desugared_fields)
 }
 
 fn desugar_block<'a>(

@@ -28,7 +28,6 @@ pub struct TypeDefinition {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Primitive {
     Number,
-    Boolean,
     Void,
 }
 
@@ -36,7 +35,7 @@ pub enum Primitive {
 pub enum Type {
     Variable(Identifier),
     Function(Vec<Type>, Box<Type>),
-    Tuple(Rc<TypeDefinition>, Vec<Type>),
+    Tuple(Rc<TypeDefinition>),
     Primitive(Primitive),
     Type,
 }
@@ -61,13 +60,15 @@ impl Type {
             }
             (Type::Primitive(_), Type::Primitive(_)) => HashMap::new(),
             (Type::Type, Type::Type) => HashMap::new(),
-            (Type::Tuple(_, general_fields), Type::Tuple(_, specialized_fields)) => {
+            (Type::Tuple(general_type_definition), Type::Tuple(specialized_type_definition)) => {
                 let mut unification = HashMap::new();
-                let fields = general_fields
-                    .into_iter()
-                    .zip(specialized_fields.into_iter());
-                for (general_field, specialized_field) in fields {
-                    unification.extend(Type::unify(general_field, specialized_field));
+                let fields = general_type_definition
+                    .variants
+                    .iter()
+                    .cloned()
+                    .zip(specialized_type_definition.variants.iter().cloned());
+                for (general_variant, specialized_variant) in fields {
+                    unification.extend(Variant::unify(general_variant, specialized_variant));
                 }
                 unification
             }
@@ -75,6 +76,24 @@ impl Type {
                 panic!("cannot unify types {:?} and {:?}", general, specialized)
             }
         }
+    }
+}
+
+impl Variant {
+    pub fn unify(general: Self, specialized: Self) -> HashMap<Identifier, Type> {
+        assert_eq!(general.tag, specialized.tag);
+
+        let mut unification = HashMap::new();
+        let fields = general
+            .arguments
+            .into_iter()
+            .zip(specialized.arguments.into_iter());
+
+        for (general_field, specialized_field) in fields {
+            unification.extend(Type::unify(general_field, specialized_field));
+        }
+
+        unification
     }
 }
 
