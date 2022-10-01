@@ -2,13 +2,13 @@ use crate::variable::*;
 use expr::expr::Pattern;
 use expr::kind::Kind;
 use expr::types::{self, Var};
-use im::HashMap;
+use im::{HashMap, HashSet};
 use std::rc::Rc;
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Binding {
-    variable: Variable,
-    value: Expr,
+    pub variable: Variable,
+    pub value: Expr,
 }
 
 // An expression with no lexical overlap at the expression or type level
@@ -17,8 +17,8 @@ pub struct Binding {
 pub enum Expr {
     Function(Vec<Variable>, Box<Expr>),
     Tuple(Tag, Rc<TypeDefinition>, Vec<Expr>),
-    TupleIndex(Box<Expr>, usize),
-    Specialize(Variable, Vec<Type>),
+    TupleIndex(Box<Expr>, usize, Type),
+    Specialize(Variable, Vec<Type>, Type),
     Variable(Variable),
     Literal(Literal),
     Switch(Box<Expr>, Vec<(Tag, Expr)>),
@@ -60,7 +60,11 @@ impl<'a> VariableEnvironment<'a> {
                         variable_source.fresh(desugar_type(&field.get_type(), self.clone()));
                     let binding = Binding {
                         variable: field_value.clone(),
-                        value: Expr::TupleIndex(Box::new(Expr::Variable(value.clone())), index),
+                        value: Expr::TupleIndex(
+                            Box::new(Expr::Variable(value.clone())),
+                            index,
+                            field_value.get_type(),
+                        ),
                     };
                     bindings.push(binding);
                     let (field_environment, field_bindings) =
@@ -82,7 +86,11 @@ impl<'a> VariableEnvironment<'a> {
                         variable_source.fresh(desugar_type(&field.get_type(), self.clone()));
                     let binding = Binding {
                         variable: field_value.clone(),
-                        value: Expr::TupleIndex(Box::new(Expr::Variable(value.clone())), index),
+                        value: Expr::TupleIndex(
+                            Box::new(Expr::Variable(value.clone())),
+                            index,
+                            field_value.get_type(),
+                        ),
                     };
                     bindings.push(binding);
                     let (field_environment, field_bindings) =
@@ -121,7 +129,7 @@ impl<'a> VariableEnvironment<'a> {
 
         if let Some(template) = template {
             let general_type = template.polymorphic_type.clone();
-            let unification = Type::unify(general_type, variable_type);
+            let unification = Type::unify(general_type, variable_type.clone());
             println!("generated unification\n\t{:#?}", unification);
 
             let mut type_arguments = Vec::new();
@@ -130,7 +138,7 @@ impl<'a> VariableEnvironment<'a> {
                 type_arguments.push(unification.get(type_variable).unwrap().clone());
             }
 
-            Expr::Specialize(desugared_variable.clone(), type_arguments)
+            Expr::Specialize(desugared_variable.clone(), type_arguments, variable_type)
         } else {
             Expr::Variable(desugared_variable.clone())
         }
@@ -166,30 +174,6 @@ impl<'a> VariableEnvironment<'a> {
 
         (environment, qualified_vars)
     }
-}
-
-#[derive(Default)]
-pub struct VariableSource(IdentifierSource);
-
-impl VariableSource {
-    pub fn fresh(&mut self, variable_type: Type) -> Variable {
-        Variable::new(self.0.fresh(), variable_type)
-    }
-}
-
-fn boolean_type() -> Type {
-    Type::Tuple(Rc::new(TypeDefinition {
-        variants: vec![
-            Variant {
-                tag: Tag::new(0),
-                arguments: Vec::new(),
-            },
-            Variant {
-                tag: Tag::new(1),
-                arguments: Vec::new(),
-            },
-        ],
-    }))
 }
 
 pub fn desugar_type(r#type: &types::Type<Kind>, environment: VariableEnvironment) -> Type {
@@ -415,5 +399,81 @@ fn desugar_block<'a>(
             desugar_block(rest, variable_source, environment)
         }
         [] => panic!("cannot compile a block that doesn't produce a result"),
+    }
+}
+
+impl Type {
+    pub fn free_variables(&self) -> HashSet<Variable> {
+        match self {
+            Type::Variable(variable) => HashSet::unit(Variable::new(variable.clone(), Type::Type)),
+            Type::Function(_, _) => todo!(),
+            Type::Tuple(_) => todo!(),
+            Type::Primitive(_) => HashSet::new(),
+            Type::Type => todo!(),
+        }
+    }
+}
+
+impl Expr {
+    pub fn free_variables(&self) -> HashSet<Variable> {
+        match self {
+            Expr::Function(arguments, body) => body
+                .free_variables()
+                .relative_complement(arguments.iter().cloned().collect())
+                .union(
+                    arguments
+                        .iter()
+                        .map(Variable::get_type)
+                        .flat_map(|ty| ty.free_variables())
+                        .collect(),
+                ),
+            Expr::Tuple(_, _, fields) => fields.iter().flat_map(Expr::free_variables).collect(),
+            Expr::TupleIndex(tuple, _, _) => tuple.free_variables(),
+            Expr::Variable(variable) => HashSet::unit(variable.clone()),
+            Expr::Literal(_) => HashSet::new(),
+            Expr::CallFunction(function, arguments) => arguments
+                .iter()
+                .map(Expr::free_variables)
+                .fold(function.free_variables(), |acc, x| acc.union(x)),
+            Expr::CallBuiltin(_, arguments) => {
+                arguments.iter().flat_map(Expr::free_variables).collect()
+            }
+
+            Expr::Switch(_, _) => todo!(),
+            Expr::Let(_, _, _) => todo!(),
+            Expr::Specialize(_, _, _) => todo!(),
+        }
+    }
+}
+
+impl Typeable for Expr {
+    fn get_type(&self) -> Type {
+        match self {
+            Expr::Function(arguments, body) => Type::Function(
+                arguments.iter().map(|arg| arg.get_type()).collect(),
+                Box::new(body.get_type()),
+            ),
+            Expr::Tuple(_, type_definition, _) => Type::Tuple(type_definition.clone()),
+            Expr::TupleIndex(_, _, result_type) => result_type.clone(),
+            Expr::Specialize(_, _, specialized_type) => specialized_type.clone(),
+            Expr::Variable(variable) => variable.get_type(),
+            Expr::Literal(literal) => literal.get_type(),
+            Expr::CallFunction(function, _) => match function.get_type() {
+                Type::Function(_, result_type) => *result_type,
+                t => panic!("{:?} should be a function type", t),
+            },
+            Expr::Switch(_, _) => todo!(),
+            Expr::CallBuiltin(builtin, _) => builtin.result_type(),
+            Expr::Let(_, _, tail) => tail.get_type(),
+        }
+    }
+}
+
+impl Typeable for Literal {
+    fn get_type(&self) -> Type {
+        match self {
+            Literal::Number(_) => Type::Primitive(Primitive::Number),
+            Literal::Boolean(_) => boolean_type(),
+        }
     }
 }

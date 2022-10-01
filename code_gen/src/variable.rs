@@ -31,6 +31,21 @@ pub enum Primitive {
     Void,
 }
 
+pub fn boolean_type() -> Type {
+    Type::Tuple(Rc::new(TypeDefinition {
+        variants: vec![
+            Variant {
+                tag: Tag::new(0),
+                arguments: Vec::new(),
+            },
+            Variant {
+                tag: Tag::new(1),
+                arguments: Vec::new(),
+            },
+        ],
+    }))
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Type {
     Variable(Identifier),
@@ -155,6 +170,15 @@ impl IdentifierSource {
     }
 }
 
+#[derive(Default)]
+pub struct VariableSource(IdentifierSource);
+
+impl VariableSource {
+    pub fn fresh(&mut self, variable_type: Type) -> Variable {
+        Variable::new(self.0.fresh(), variable_type)
+    }
+}
+
 impl Debug for Identifier {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "%{}", self.id)
@@ -174,5 +198,24 @@ pub trait Typeable {
 impl Typeable for Variable {
     fn get_type(&self) -> Type {
         self.variable_type.clone()
+    }
+}
+
+impl Builtin {
+    pub fn result_type(&self) -> Type {
+        match self {
+            Builtin::Operator(operator) => match operator {
+                Operator::Plus | Operator::Minus | Operator::Times => {
+                    Type::Primitive(Primitive::Number)
+                }
+                Operator::And
+                | Operator::Or
+                | Operator::Equals
+                | Operator::LessThan
+                | Operator::LessThanEqual
+                | Operator::GreaterThan
+                | Operator::GreaterThanEqual => boolean_type(),
+            },
+        }
     }
 }

@@ -16,7 +16,9 @@
 )]
 
 use code_gen::{
-    desugar::{desugar_expr, VariableEnvironment, VariableSource},
+    desugar::{desugar_expr, VariableEnvironment},
+    lift::{lift_expr, Environment, FunctionPointerSource},
+    variable::VariableSource,
     wasm::{WATFormatter, Wasm},
 };
 use expr::{
@@ -247,7 +249,10 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
 }
 
 fn main() {
-    let text = "fn x -> if x then false else true";
+    let text = "{
+        let (a, b) = (10, 11);
+        a + b;
+    }";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
@@ -259,6 +264,12 @@ fn main() {
     let desugared_expr = desugar_expr(&typed_ast, &mut vars, env);
 
     println!("{:#?}", desugared_expr);
+
+    let mut functions = FunctionPointerSource::default();
+    let closure_env = Environment::default();
+    let lifted_expr = lift_expr(desugared_expr, closure_env, &mut vars, &mut functions);
+
+    println!("{:#?}", lifted_expr);
 }
 
 #[cfg(test)]
