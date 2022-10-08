@@ -244,7 +244,10 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
 }
 
 fn main() {
-    let text = "(fn a -> a) 5";
+    let text = "{
+        let const = fn a b -> a;
+        const 5 6;
+    }";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();

@@ -23,14 +23,12 @@
     clippy::cast_precision_loss
 )]
 
-pub mod desugar_new;
-pub mod variable_new;
+pub mod desugar;
+pub mod variable;
 
 /*
 pub mod convert;
-pub mod desugar;
 pub mod lift;
 pub mod rc;
-pub mod variable;
 */
 pub mod wasm;
