@@ -1,8 +1,7 @@
 use core::slice;
 use std::rc::Rc;
 
-use crate::variable_new::*;
-use bumpalo::Bump;
+use crate::variable::*;
 use expr::kind::Kind;
 use expr::types;
 use im::HashMap;
@@ -20,8 +19,8 @@ pub enum Expr<'e, 't> {
 
 #[derive(Debug)]
 pub struct Binding<'e, 't> {
-    variable: Variable<'t>,
-    value: &'e Expr<'e, 't>,
+    pub variable: Variable<'t>,
+    pub value: &'e Expr<'e, 't>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -30,48 +29,6 @@ pub struct Environment<'t, 'a> {
     type_variable_bindings: HashMap<Rc<String>, Identifier>
 }
 
-#[derive(Copy, Clone)]
-pub struct Allocator<'e, 't> {
-    expr_arena: &'e Bump,
-    type_arena: &'t Bump,
-}
-
-impl<'e, 't> Allocator<'e, 't> {
-    pub fn new(expr_arena: &'e Bump, type_arena: &'t Bump) -> Self {
-        Allocator {
-            expr_arena,
-            type_arena,
-        }
-    }
-
-    fn alloc_type(&self, r#type: Type<'t>) -> &'t Type<'t> {
-        self.type_arena.alloc(r#type)
-    }
-}
-
-impl<'e, 't> Allocator<'e, 't> {
-    pub fn alloc_expr(&self, expr: Expr<'e, 't>) -> &'e mut Expr<'e, 't> {
-        self.expr_arena.alloc(expr)
-    }
-
-    pub fn alloc_expr_iter<T>(
-        &self,
-        iter: impl Iterator<Item = T> + ExactSizeIterator,
-    ) -> &'e mut [T] {
-        self.expr_arena.alloc_slice_fill_iter(iter)
-    }
-
-    pub fn alloc_variable(&self, variable: Variable<'t>) -> &'e Variable<'t> {
-        self.expr_arena.alloc(variable)
-    }
-
-    pub fn alloc_type_iter<T>(
-        &self,
-        iter: impl Iterator<Item = T> + ExactSizeIterator
-    ) -> &'t mut [T] {
-        self.type_arena.alloc_slice_fill_iter(iter)
-    }
-}
 
 pub fn desugar_expr<'e, 't, 'a>(
     expr: &'a expr::expr::Expr<types::Type<Kind>>,
@@ -111,9 +68,9 @@ pub fn desugar_expr<'e, 't, 'a>(
         expr::expr::Expr::Boolean(boolean) => Expr::Literal(Literal::Boolean(*boolean)),
         expr::expr::Expr::Operator(operator, _) => {
             let arg_a = variables.fresh(env.desugar_type(&operator.argument_type(), arenas));
-            let args_a = slice::from_ref(arenas.alloc_variable(arg_a));
+            let args_a = slice::from_ref(arenas.alloc_expr(arg_a));
             let arg_b = variables.fresh(env.desugar_type(&operator.argument_type(), arenas));
-            let args_b = slice::from_ref(arenas.alloc_variable(arg_b));
+            let args_b = slice::from_ref(arenas.alloc_expr(arg_b));
 
             let builtin_args =
                 arenas.alloc_expr_iter([arg_a, arg_b].into_iter().map(Expr::Variable));
@@ -287,6 +244,39 @@ impl<'t, 'a> Environment<'t, 'a> {
                 })
             );
             (env, type_arguments)
+        }
+    }
+}
+
+impl<'t> Typeable<'t> for Expr<'_, 't> {
+    fn get_type(&self, arenas: Allocator<'_, 't>) -> Type<'t> {
+        match self {
+            Expr::Function(arguments, body) => {
+                Type::Function(arenas.alloc_type_iter(arguments.iter().map(|arg| arg.get_type(arenas))), arenas.alloc_type(body.get_type(arenas)))
+            }
+            Expr::CallFunction(_, _, result_type) => (*result_type).clone(),
+            Expr::CallBuiltin(builtin, _) => builtin.get_type(arenas),
+            Expr::Literal(literal) => literal.get_type(arenas),
+            Expr::Variable(variable) => variable.get_type(arenas),
+            Expr::Let(_, _, body) => body.get_type(arenas),
+            Expr::Tuple(_, _, _) => todo!(),
+        }
+    }
+}
+
+impl<'t> Typeable<'t> for Builtin {
+    fn get_type(&self, arenas: Allocator<'_, 't>) -> Type<'t> {
+        match self {
+            Builtin::Operator(operator) => Type::Primitive(Primitive::Number)
+        }
+    }
+}
+
+impl<'t> Typeable<'t> for Literal {
+    fn get_type(&self, arenas: Allocator<'_, 't>) -> Type<'t> {
+        match self {
+            Literal::Number(_) => Type::Primitive(Primitive::Number),
+            Literal::Boolean(_) => todo!(),
         }
     }
 }

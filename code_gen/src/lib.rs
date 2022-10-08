@@ -25,10 +25,10 @@
 
 pub mod desugar;
 pub mod variable;
+pub mod lift;
 
 /*
 pub mod convert;
-pub mod lift;
 pub mod rc;
 */
 pub mod wasm;

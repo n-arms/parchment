@@ -1,4 +1,5 @@
 use std::fmt::{Debug, Formatter};
+use bumpalo::Bump;
 
 use expr::expr::Operator;
 
@@ -108,5 +109,51 @@ impl Debug for Variable<'_> {
 impl Identifier {
     fn new(id: usize) -> Identifier {
         Identifier { id }
+    }
+}
+#[derive(Copy, Clone)]
+pub struct Allocator<'e, 't> {
+    expr_arena: &'e Bump,
+    type_arena: &'t Bump,
+}
+
+impl<'e, 't> Allocator<'e, 't> {
+    pub fn new(expr_arena: &'e Bump, type_arena: &'t Bump) -> Self {
+        Allocator {
+            expr_arena,
+            type_arena,
+        }
+    }
+
+    pub fn alloc_type<T>(&self, value: T) -> &'t mut T {
+        self.type_arena.alloc(value)
+    }
+
+    pub fn alloc_expr<T>(&self, value: T) -> &'e mut T {
+        self.expr_arena.alloc(value)
+    }
+
+    pub fn alloc_expr_iter<T>(
+        &self,
+        iter: impl Iterator<Item = T> + ExactSizeIterator,
+    ) -> &'e mut [T] {
+        self.expr_arena.alloc_slice_fill_iter(iter)
+    }
+
+    pub fn alloc_type_iter<T>(
+        &self,
+        iter: impl Iterator<Item = T> + ExactSizeIterator
+    ) -> &'t mut [T] {
+        self.type_arena.alloc_slice_fill_iter(iter)
+    }
+}
+
+pub trait Typeable<'t> {
+    fn get_type(&self, arenas: Allocator<'_, 't>) -> Type<'t>;
+}
+
+impl<'t> Typeable<'t> for Variable<'t> {
+    fn get_type(&self, arenas: Allocator<'_, 't>) -> Type<'t> {
+        self.variable_type.clone()
     }
 }

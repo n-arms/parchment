@@ -15,7 +15,7 @@
     clippy::self_named_module_files
 )]
 use bumpalo::Bump;
-use code_gen::{desugar_new, variable_new, wasm::*};
+use code_gen::{desugar, variable, lift, wasm::*};
 use expr::{
     expr::Expr,
     fmt::{format, Pretty},
@@ -244,10 +244,7 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
 }
 
 fn main() {
-    let text = "{
-        let const = fn a b -> a;
-        const 5 6;
-    }";
+    let text = "fn a -> a";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
@@ -256,13 +253,32 @@ fn main() {
 
     let types = Bump::new();
     let exprs = Bump::new();
-    let arenas = desugar_new::Allocator::new(&exprs, &types);
-    let env = desugar_new::Environment::default();
-    let mut vars = variable_new::VariableSource::default();
+    let arenas = variable::Allocator::new(&exprs, &types);
+    let env = desugar::Environment::default();
+    let mut vars = variable::VariableSource::default();
 
-    let desugared_expr = desugar_new::desugar_expr(&typed_ast, env, &mut vars, arenas);
+    let desugared_expr = desugar::desugar_expr(&typed_ast, env, &mut vars, arenas);
 
     println!("{:#?}", desugared_expr);
+
+    let mut ptrs = lift::FunctionPointerSource::default();
+    let lifted_exprs = Bump::new();
+    let lifted_arenas = variable::Allocator::new(&lifted_exprs, &types);
+    let env = lift::Environment::default();
+    let mut defs = lift::Definitions::default();
+
+    let lifted_expr = lift::lift_expr(
+        &desugared_expr,
+        env,
+        &mut defs,
+        &mut vars,
+        &mut ptrs,
+        lifted_arenas
+    );
+
+    println!("{:#?}", defs);
+    println!("{:#?}", lifted_expr);
+
 
     /*
 
