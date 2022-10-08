@@ -124,9 +124,9 @@ impl Identifier {
 }
 
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Variable {
+pub struct Variable<'t> {
     variable_name: Identifier,
-    variable_type: Type,
+    variable_type: &'t mut Type,
 }
 
 impl Variable {
@@ -176,6 +176,10 @@ pub struct VariableSource(IdentifierSource);
 impl VariableSource {
     pub fn fresh(&mut self, variable_type: Type) -> Variable {
         Variable::new(self.0.fresh(), variable_type)
+    }
+
+    pub fn fresh_id(&mut self) -> Identifier {
+        self.0.fresh()
     }
 }
 

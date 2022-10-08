@@ -14,13 +14,8 @@
     clippy::use_debug,
     clippy::self_named_module_files
 )]
-
-use code_gen::{
-    desugar::{desugar_expr, VariableEnvironment},
-    lift::{lift_expr, Environment, FunctionPointerSource},
-    variable::VariableSource,
-    wasm::{WATFormatter, Wasm},
-};
+use bumpalo::Bump;
+use code_gen::{desugar_new, variable_new, wasm::*};
 use expr::{
     expr::Expr,
     fmt::{format, Pretty},
@@ -249,15 +244,24 @@ fn run_wasm(wasm: &Wasm, result_type: Type<Kind>) -> Option<String> {
 }
 
 fn main() {
-    let text = "{
-        let (a, b) = (10, 11);
-        a + b;
-    }";
+    let text = "(fn a -> a) 5";
     let ast = parse_ast(text).unwrap();
 
     let (typed_ast, type_defs) = infer_types(&ast, false).unwrap();
 
     println!("{:#?}", typed_ast);
+
+    let types = Bump::new();
+    let exprs = Bump::new();
+    let arenas = desugar_new::Allocator::new(&exprs, &types);
+    let env = desugar_new::Environment::default();
+    let mut vars = variable_new::VariableSource::default();
+
+    let desugared_expr = desugar_new::desugar_expr(&typed_ast, env, &mut vars, arenas);
+
+    println!("{:#?}", desugared_expr);
+
+    /*
 
     let mut vars = VariableSource::default();
     let env = VariableEnvironment::default();
@@ -270,6 +274,12 @@ fn main() {
     let lifted_expr = lift_expr(desugared_expr, closure_env, &mut vars, &mut functions);
 
     println!("{:#?}", lifted_expr);
+    */
+    /*
+        let rc_program = reference_count_program(lifted_expr);
+
+        println!("{:#?}", rc_program);
+    */
 }
 
 #[cfg(test)]

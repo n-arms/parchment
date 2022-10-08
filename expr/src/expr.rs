@@ -37,7 +37,7 @@ pub enum Expr<A: std::clone::Clone> {
 }
 
 impl Expr<Type<Kind>> {
-    pub fn free_vars(&self) -> HashSet<(String, Type<Kind>)> {
+    pub fn free_vars<'a>(&'a self) -> HashSet<(&'a str, Type<Kind>)> {
         match self {
             Expr::Function(pattern, body, _) => {
                 body.free_vars().relative_complement(pattern.bound_vars())
@@ -46,7 +46,7 @@ impl Expr<Type<Kind>> {
             Expr::Constructor(..) | Expr::Operator(..) | Expr::Number(_) | Expr::Boolean(_) => {
                 HashSet::new()
             }
-            Expr::Variable(var, var_type) => HashSet::unit((var.clone(), var_type.clone())),
+            Expr::Variable(var, var_type) => HashSet::unit((var, var_type.clone())),
             Expr::Record(r) => r.values().flat_map(Expr::free_vars).collect(),
             Expr::Tuple(es) => es.iter().flat_map(Expr::free_vars).collect(),
             Expr::If(p, c, a) => p.free_vars().union(c.free_vars()).union(a.free_vars()),
@@ -62,7 +62,7 @@ impl Expr<Type<Kind>> {
     }
 }
 
-fn free_block(b: &[Statement<Type<Kind>>]) -> HashSet<(String, Type<Kind>)> {
+fn free_block<'a>(b: &'a [Statement<Type<Kind>>]) -> HashSet<(&'a str, Type<Kind>)> {
     match b {
         [Statement::Let(pattern, body, _), rest @ ..] => body
             .free_vars()
@@ -472,9 +472,9 @@ impl<A: std::clone::Clone + std::fmt::Debug> fmt::Display for Pattern<A> {
 }
 
 impl Pattern<Type<Kind>> {
-    pub fn bound_vars(&self) -> HashSet<(String, Type<Kind>)> {
+    pub fn bound_vars<'a>(&'a self) -> HashSet<(&'a str, Type<Kind>)> {
         match self {
-            Pattern::Variable(v, var_type) => HashSet::unit((v.clone(), var_type.clone())),
+            Pattern::Variable(v, var_type) => HashSet::unit((v, var_type.clone())),
             Pattern::Record(r) => r.values().flat_map(Pattern::bound_vars).collect(),
             Pattern::Construction(_, t, _) | Pattern::Tuple(t) => {
                 t.iter().flat_map(Pattern::bound_vars).collect()

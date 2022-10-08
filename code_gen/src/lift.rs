@@ -8,48 +8,60 @@ pub struct FunctionPointer {
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct FunctionDefinition {
-    arguments: Vec<Variable>,
-    body: Block,
+pub struct FunctionDefinition<Instr> {
+    pub arguments: Vec<Variable>,
+    pub body: Block<Instr>,
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct Program {
-    definitions: HashMap<FunctionPointer, FunctionDefinition>,
-    main: Block,
+pub struct Program<Instr: Clone> {
+    pub definitions: HashMap<FunctionPointer, FunctionDefinition<Instr>>,
+    pub main: Block<Instr>,
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub struct Block {
-    instructions: Vec<Binding>,
-    result: Variable,
+pub struct Block<Instr> {
+    pub instructions: Vec<Instr>,
+    pub result: Variable,
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
-pub enum Expr {
+pub enum Expr<Instr> {
     Closure(FunctionPointer, Vec<Variable>),
     Tuple(Tag, Vec<Variable>),
     TupleIndex(Variable, usize),
     Variable(Variable),
     Literal(Literal),
-    Switch(Variable, Vec<(Tag, Block)>),
-    SpecializeClosure(Variable, Vec<Type>),
+    Switch(Variable, Vec<(Tag, Block<Instr>)>),
+    SpecializeClosure(Variable, Vec<Type>, usize),
     CallClosure(Variable, Vec<Variable>),
     CallBuiltin(Builtin, Vec<Variable>),
 }
 
 #[derive(Clone, Debug, PartialEq, PartialOrd)]
 pub struct Binding {
-    variable: Variable,
-    value: Expr,
+    pub variable: Variable,
+    pub value: Expr<Binding>,
 }
 
 #[derive(Clone, Default)]
 pub struct Environment {
     let_bindings: HashMap<Identifier, Variable>,
+    closure_offsets: HashMap<Identifier, usize>,
 }
 
 impl Environment {
+    pub fn closure_offset(&self, closure: Identifier) -> usize {
+        *self.closure_offsets.get(&closure).unwrap()
+    }
+
+    pub fn bind_closure(&self, closure: Identifier, offset: usize) -> Self {
+        Environment {
+            let_bindings: self.let_bindings.clone(),
+            closure_offsets: self.closure_offsets.update(closure, offset),
+        }
+    }
+
     pub fn lookup_variable(&self, variable: Identifier) -> Option<Variable> {
         self.let_bindings.get(&variable).cloned()
     }
@@ -57,6 +69,7 @@ impl Environment {
     pub fn bind_variable(&self, old_variable: Identifier, new_variable: Variable) -> Self {
         Environment {
             let_bindings: self.let_bindings.update(old_variable, new_variable),
+            closure_offsets: self.closure_offsets.clone(),
         }
     }
 }
@@ -75,7 +88,7 @@ pub fn lift_expr(
     environment: Environment,
     variable_source: &mut VariableSource,
     function_pointer_source: &mut FunctionPointerSource,
-) -> Program {
+) -> Program<Binding> {
     let expr_type = expr.get_type();
     match expr {
         desugar::Expr::Function(arguments, body) => {
@@ -235,8 +248,9 @@ pub fn lift_expr(
         }
         desugar::Expr::Specialize(target, generic_arguments, specialized_type) => {
             let target_closure = environment.lookup_variable(target.identifier()).unwrap();
+            let offset = environment.closure_offset(target.identifier());
 
-            let expr = Expr::SpecializeClosure(target_closure, generic_arguments);
+            let expr = Expr::SpecializeClosure(target_closure, generic_arguments, offset);
             let specialize_variable = variable_source.fresh(specialized_type);
             let main =
                 Block::new(specialize_variable.clone()).with_instruction(specialize_variable, expr);
@@ -288,20 +302,22 @@ pub fn lift_expr(
     }
 }
 
-fn lift_literal(literal: Literal, variable_source: &mut VariableSource) -> Block {
+fn lift_literal(literal: Literal, variable_source: &mut VariableSource) -> Block<Binding> {
     let literal_result = variable_source.fresh(literal.get_type());
     Block::new(literal_result.clone()).with_instruction(literal_result, Expr::Literal(literal))
 }
 
-impl Block {
-    fn new(result: Variable) -> Block {
+impl<Instr: Clone> Block<Instr> {
+    fn new(result: Variable) -> Block<Instr> {
         Block {
             result,
             instructions: Vec::new(),
         }
     }
+}
 
-    fn with_instruction(mut self, variable: Variable, value: Expr) -> Block {
+impl Block<Binding> {
+    fn with_instruction(mut self, variable: Variable, value: Expr<Binding>) -> Block<Binding> {
         self.instructions.push(Binding { value, variable });
         self
     }

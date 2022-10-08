@@ -13,3 +13,4 @@ im = "15.0.0"
 rand = "0.8.4"
 expr = { path = "../expr" }
 itertools = "0.10.3"
+bumpalo = "3.11.0"

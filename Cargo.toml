@@ -16,6 +16,7 @@ expr = { path = "./expr" }
 type_checker = { path = "./type_checker" }
 im = "15.0.0"
 itertools = "0.10.3"
+bumpalo = "3.11.0"
 
 [workspace]
 members = [
